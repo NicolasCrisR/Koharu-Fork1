@@ -16,11 +16,13 @@ pub use engine::{
 };
 pub use engines::support;
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Result, bail};
 use koharu_core::{Op, PageId, PipelineStep};
+use koharu_llm::providers::ProviderError;
 use koharu_runtime::RuntimeManager;
 use tracing::Instrument;
 
@@ -153,8 +155,22 @@ pub async fn run(
     let mut completed: u64 = 0;
     let mut warning_count: usize = 0;
 
-    'pages: for (page_index, page_id) in pages.iter().enumerate() {
-        for (seq, &i) in order.iter().enumerate() {
+    // A page whose LLM step fails on quota goes to the back of the queue
+    // instead of being abandoned — by the time it comes back around, other
+    // pages have kept the clock moving and a cooldown may have expired.
+    // Bounded so a permanently-broken key can't loop forever.
+    let mut queue: VecDeque<PageId> = pages.iter().copied().collect();
+    let mut page_retry_counts: HashMap<PageId, u32> = HashMap::new();
+    // Where a requeued page should resume — the index of the step that
+    // failed, so retrying doesn't redo already-completed steps (OCR,
+    // detection, etc.) for that page.
+    let mut page_resume_index: HashMap<PageId, usize> = HashMap::new();
+
+    let mut page_index: usize = 0;
+    'pages: while let Some(page_id) = queue.pop_front() {
+        let page_id = &page_id;
+        let resume_from = page_resume_index.get(page_id).copied().unwrap_or(0);
+        for (seq, &i) in order.iter().enumerate().skip(resume_from) {
             if cancel.load(Ordering::Relaxed) {
                 bail!("cancelled");
             }
@@ -178,6 +194,7 @@ pub async fn run(
                 // Skip the remaining steps for a deleted page and credit all
                 // of them against total_units so progress still reaches 100%.
                 completed += (total_steps - seq) as u64;
+                page_index += 1;
                 continue 'pages;
             }
 
@@ -197,6 +214,7 @@ pub async fn run(
                         warnings.as_ref(),
                     );
                     completed += (total_steps - seq) as u64;
+                    page_index += 1;
                     continue 'pages;
                 }
             };
@@ -217,6 +235,24 @@ pub async fn run(
             let ops = match step_result {
                 Ok(ops) => ops,
                 Err(err) => {
+                    if is_quota_exceeded(&err) {
+                        let attempts = page_retry_counts.entry(*page_id).or_insert(0);
+                        *attempts += 1;
+                        if *attempts <= MAX_PAGE_RETRIES {
+                            tracing::warn!(
+                                page = %page_id,
+                                attempt = *attempts,
+                                "quota exceeded, requeuing page for a later retry"
+                            );
+                            page_resume_index.insert(*page_id, seq);
+                            queue.push_back(*page_id);
+                            continue 'pages;
+                        }
+                        tracing::warn!(
+                            page = %page_id,
+                            "quota exceeded, giving up on page after max retries"
+                        );
+                    }
                     report_step_failure(
                         info.id,
                         page_id,
@@ -231,6 +267,7 @@ pub async fn run(
                     // Subsequent steps on this page almost always consume the
                     // failed step's artifact; skip the rest and move on.
                     completed += (total_steps - seq) as u64;
+                    page_index += 1;
                     continue 'pages;
                 }
             };
@@ -254,9 +291,11 @@ pub async fn run(
                     &mut warning_count,
                     warnings.as_ref(),
                 );
+                page_index += 1;
                 continue 'pages;
             }
         }
+        page_index += 1;
     }
 
     if let Some(sink) = progress.as_ref() {
@@ -272,7 +311,22 @@ pub async fn run(
     }
     Ok(RunOutcome { warning_count })
 }
+/// How many times a page gets requeued after a quota-related failure before
+/// it's treated as a hard failure like any other error. `ManagedProvider`
+/// already retries/rotates keys internally before giving up, so by the time
+/// an error reaches here it's already close to terminal — this is an extra
+/// safety net, not the primary retry mechanism.
+const MAX_PAGE_RETRIES: u32 = 3;
 
+/// True if `err` is (or wraps) a [`ProviderError::QuotaExceeded`] — the only
+/// case worth requeuing a page for, since any other error will just fail the
+/// same way again.
+fn is_quota_exceeded(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<ProviderError>(),
+        Some(ProviderError::QuotaExceeded { .. })
+    )
+}
 #[allow(clippy::too_many_arguments)]
 fn report_step_failure(
     engine_id: &str,
