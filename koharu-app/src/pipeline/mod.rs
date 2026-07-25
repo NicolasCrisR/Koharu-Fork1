@@ -62,6 +62,8 @@ pub struct WarningTick {
 #[derive(Debug, Clone, Default)]
 pub struct RunOutcome {
     pub warning_count: usize,
+    pub pages_requeued: usize,
+    pub pages_failed_after_retries: usize,
 }
 
 /// Map an engine's produced artifact to its UI step category. Stays
@@ -154,6 +156,8 @@ pub async fn run(
     let total_units = (total_pages * total_steps) as u64;
     let mut completed: u64 = 0;
     let mut warning_count: usize = 0;
+    let mut pages_requeued: usize = 0;
+    let mut pages_failed_after_retries: usize = 0;
 
     // A page whose LLM step fails on quota goes to the back of the queue
     // instead of being abandoned — by the time it comes back around, other
@@ -239,19 +243,21 @@ pub async fn run(
                         let attempts = page_retry_counts.entry(*page_id).or_insert(0);
                         *attempts += 1;
                         if *attempts <= MAX_PAGE_RETRIES {
-                            tracing::warn!(
+                            tracing::info!(
                                 page = %page_id,
                                 attempt = *attempts,
                                 "quota exceeded, requeuing page for a later retry"
                             );
                             page_resume_index.insert(*page_id, seq);
                             queue.push_back(*page_id);
+                            pages_requeued += 1;
                             continue 'pages;
                         }
                         tracing::warn!(
                             page = %page_id,
                             "quota exceeded, giving up on page after max retries"
                         );
+                        pages_failed_after_retries += 1;
                     }
                     report_step_failure(
                         info.id,
@@ -309,7 +315,11 @@ pub async fn run(
             overall_percent: 100,
         });
     }
-    Ok(RunOutcome { warning_count })
+    Ok(RunOutcome {
+        warning_count,
+        pages_requeued,
+        pages_failed_after_retries,
+    })
 }
 /// How many times a page gets requeued after a quota-related failure before
 /// it's treated as a hard failure like any other error. `ManagedProvider`
