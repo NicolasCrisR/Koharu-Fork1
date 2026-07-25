@@ -19,7 +19,7 @@ use koharu_core::{
     LlmState, LlmStateStatus, LlmTarget, LlmTargetKind,
 };
 use koharu_llm::providers::{
-    AnyProvider, ProviderCatalogModels, ProviderConfig, ProviderDescriptor,
+    AnyProvider, ManagedProvider, ProviderCatalogModels, ProviderConfig, ProviderDescriptor,
     all_provider_descriptors, build_provider, discover_models,
 };
 use koharu_llm::safe::llama_backend::LlamaBackend;
@@ -278,6 +278,7 @@ impl Model {
                     anyhow::anyhow!("no saved provider configuration for {provider_id}")
                 })?;
                 let provider = build_provider(provider_id, config)?;
+                let provider: Box<dyn AnyProvider> = Box::new(ManagedProvider::new(provider));
                 self.load_provider(request.target, provider).await?;
                 Ok(())
             }

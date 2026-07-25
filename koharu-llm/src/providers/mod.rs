@@ -24,8 +24,11 @@ pub mod deepl;
 pub mod deepseek;
 pub mod gemini;
 pub mod google_translate;
+pub mod managed;
 pub mod openai;
 pub mod openai_compatible;
+
+pub use managed::ManagedProvider;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderModelDescriptor {
