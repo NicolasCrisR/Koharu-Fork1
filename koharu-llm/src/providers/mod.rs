@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use reqwest_middleware::ClientWithMiddleware;
@@ -70,6 +71,20 @@ pub struct ProviderDescriptor {
     pub models: ProviderCatalogModels,
     pub build: fn(ProviderConfig) -> anyhow::Result<Box<dyn AnyProvider>>,
 }
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderError {
+    #[error("quota exceeded for provider {provider}")]
+    QuotaExceeded {
+        provider: String,
+        retry_after: Option<Duration>,
+    },
+    #[error("{provider} API request failed ({status}): {body}")]
+    Fatal {
+        provider: String,
+        status: u16,
+        body: String,
+    },
+}
 
 pub async fn ensure_provider_success(
     provider: &str,
@@ -79,6 +94,13 @@ pub async fn ensure_provider_success(
     if status.is_success() {
         return Ok(response);
     }
+
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
 
     let body = response
         .text()
@@ -93,11 +115,21 @@ pub async fn ensure_provider_success(
         || body_lower.contains("credit balance is too low");
 
     if quota_exceeded {
-        anyhow::bail!("provider_quota_exceeded:{provider}");
+        return Err(ProviderError::QuotaExceeded {
+            provider: provider.to_string(),
+            retry_after,
+        }
+            .into());
     }
 
-    anyhow::bail!("{provider} API request failed ({status}): {body}");
+    Err(ProviderError::Fatal {
+        provider: provider.to_string(),
+        status: status.as_u16(),
+        body,
+    }
+        .into())
 }
+
 
 pub trait AnyProvider: Send + Sync {
     fn translate<'a>(
