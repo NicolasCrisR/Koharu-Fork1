@@ -254,10 +254,14 @@ impl Model {
 
 impl Model {
     /// Resolve + build a provider from the app config, then load it.
+    ///
+    /// `provider_configs` holds one `ProviderConfig` per API key (see
+    /// `provider_configs_from_settings`); `ManagedProvider` rotates across
+    /// them on quota errors.
     pub async fn load_from_request(
         &self,
         request: LlmLoadRequest,
-        provider_config: Option<ProviderConfig>,
+        provider_configs: Option<Vec<ProviderConfig>>,
     ) -> Result<()> {
         match request.target.kind {
             LlmTargetKind::Local => {
@@ -274,17 +278,24 @@ impl Model {
                     .provider_id
                     .as_deref()
                     .ok_or_else(|| anyhow::anyhow!("provider target missing provider_id"))?;
-                let config = provider_config.ok_or_else(|| {
+                let configs = provider_configs.ok_or_else(|| {
                     anyhow::anyhow!("no saved provider configuration for {provider_id}")
                 })?;
-                let provider = build_provider(provider_id, config)?;
-                let provider: Box<dyn AnyProvider> = Box::new(ManagedProvider::new(provider));
+                if configs.is_empty() {
+                    anyhow::bail!("no saved provider configuration for {provider_id}");
+                }
+                let mut providers = Vec::with_capacity(configs.len());
+                for config in configs {
+                    providers.push(build_provider(provider_id, config)?);
+                }
+                let provider: Box<dyn AnyProvider> = Box::new(ManagedProvider::new(providers));
                 self.load_provider(request.target, provider).await?;
                 Ok(())
             }
         }
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -432,7 +443,40 @@ pub fn provider_config_from_settings(
         max_tokens: None,
     }
 }
+/// Build one `ProviderConfig` per configured API key (see
+/// `AppConfig`'s `ProviderConfig::all_api_keys`), for `ManagedProvider`'s
+/// rotation. Falls back to a single key-less entry when none is configured,
+/// matching the previous single-key behavior (the missing-key error is then
+/// raised by `build_provider` itself, same as before).
+pub fn provider_configs_from_settings(
+    config: &crate::config::AppConfig,
+    runtime: &RuntimeManager,
+    provider_id: &str,
+) -> Vec<ProviderConfig> {
+    let stored = config.providers.iter().find(|p| p.id == provider_id);
+    let base_url = stored.and_then(|p| p.base_url.clone());
+    let keys = stored.map(|p| p.all_api_keys()).unwrap_or_default();
 
+    if keys.is_empty() {
+        return vec![ProviderConfig {
+            http_client: runtime.http_client(),
+            api_key: None,
+            base_url,
+            temperature: None,
+            max_tokens: None,
+        }];
+    }
+
+    keys.into_iter()
+        .map(|key| ProviderConfig {
+            http_client: runtime.http_client(),
+            api_key: Some(key),
+            base_url: base_url.clone(),
+            temperature: None,
+            max_tokens: None,
+        })
+        .collect()
+}
 // ---------------------------------------------------------------------------
 // Tag formatting + response parsing
 // ---------------------------------------------------------------------------

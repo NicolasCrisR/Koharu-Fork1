@@ -37,9 +37,9 @@ async fn put_current_llm(
     State(app): State<AppState>,
     Json(req): Json<LlmLoadRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
-    let provider_config = match req.target.kind {
+    let provider_configs = match req.target.kind {
         LlmTargetKind::Provider => req.target.provider_id.as_deref().map(|pid| {
-            koharu_app::llm::provider_config_from_settings(&app.config.load(), &app.runtime, pid)
+            koharu_app::llm::provider_configs_from_settings(&app.config.load(), &app.runtime, pid)
         }),
         LlmTargetKind::Local => None,
     };
@@ -47,7 +47,7 @@ async fn put_current_llm(
     // state transition — `load_from_request` may return before the
     // background load task has actually finished.
     app.llm
-        .load_from_request(req, provider_config)
+        .load_from_request(req, provider_configs)
         .await
         .map_err(ApiError::internal)?;
     Ok(axum::http::StatusCode::NO_CONTENT)

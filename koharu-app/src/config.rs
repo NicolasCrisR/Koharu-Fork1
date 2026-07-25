@@ -119,6 +119,29 @@ pub struct ProviderConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
     pub api_key: Option<RedactedSecret>,
+    /// Additional keys for round-robin rotation when one hits a rate limit.
+    /// Optional and purely additive: configs with only `api_key` keep
+    /// working unchanged (see `all_api_keys`). Unlike `api_key`, these are
+    /// stored directly in `config.toml` rather than the OS credential
+    /// store — a deliberate simplification for a local, single-user tool;
+    /// worth knowing if you ever share this file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_keys: Vec<String>,
+}
+
+impl ProviderConfig {
+    /// All configured keys for this provider, in the order they should be
+    /// tried: `api_keys` first when present, otherwise the single legacy
+    /// `api_key`.
+    pub fn all_api_keys(&self) -> Vec<String> {
+        if !self.api_keys.is_empty() {
+            return self.api_keys.clone();
+        }
+        self.api_key
+            .as_ref()
+            .map(|k| vec![k.expose().to_owned()])
+            .unwrap_or_default()
+    }
 }
 
 impl Default for DataConfig {
@@ -252,6 +275,10 @@ pub fn apply_patch(config: &mut AppConfig, patch: koharu_core::ConfigPatch) {
                     .base_url
                     .or_else(|| existing.and_then(|e| e.base_url.clone())),
                 api_key,
+                // Not part of the patch schema yet (no settings-UI support
+                // for multiple keys) — carry over whatever was already in
+                // config.toml so a patch never silently wipes it out.
+                api_keys: existing.map(|e| e.api_keys.clone()).unwrap_or_default(),
             });
         }
         config.providers = new_providers;
