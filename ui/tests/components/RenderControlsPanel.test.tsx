@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -198,5 +198,19 @@ describe('RenderControlsPanel Font Assignment', () => {
     const op = (sceneActions.applyOp as any).mock.calls[0][0]
     expect(op.updateNode.id).toBe('t1')
     expect(op.updateNode.patch.data.text.style.color).toEqual([0, 0, 0, 255])
+  })
+
+  it('applies line spacing only to the selected block', async () => {
+    renderWithQuery(<RenderControlsPanel />)
+    useSelectionStore.getState().select('t1', false)
+
+    const input = await screen.findByTestId('render-line-spacing')
+    fireEvent.change(input, { target: { value: '1.5' } })
+
+    await waitFor(() => expect(sceneActions.applyOp).toHaveBeenCalled())
+    const op = (sceneActions.applyOp as any).mock.calls[0][0]
+    expect(op.updateNode.page).toBe('p1')
+    expect(op.updateNode.id).toBe('t1')
+    expect(op.updateNode.patch.data.text.style.lineSpacing).toBe(1.5)
   })
 })

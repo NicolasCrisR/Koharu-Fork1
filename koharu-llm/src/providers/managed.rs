@@ -1,12 +1,20 @@
 //! `ManagedProvider` wraps one or more [`AnyProvider`] instances — one per
 //! configured API key — and adds:
 //!
-//! - retry on [`super::ProviderError::QuotaExceeded`], honoring
-//!   `Retry-After` (capped at [`MAX_RETRY_WAIT`] so a huge daily-quota reset
-//!   can't hang the app);
+//! - retry on [`super::ProviderError::QuotaExceeded`], honoring the real
+//!   `retry_after` parsed from the provider's error body when available.
+//!   The fallback default (when `retry_after` is missing) and the safety-net
+//!   cap both depend on the error's [`QuotaKind`]: a per-minute rate limit
+//!   gets a short leash ([`DEFAULT_RATE_LIMIT_WAIT`] / [`MAX_RATE_LIMIT_WAIT`]),
+//!   while a daily quota is allowed to actually last most of a day
+//!   ([`DEFAULT_DAILY_QUOTA_WAIT`] / [`MAX_DAILY_QUOTA_WAIT`]) instead of
+//!   being clamped down to a few minutes and re-failing the same 429
+//!   repeatedly;
 //! - round-robin rotation across keys, skipping any that are in cooldown;
-//! - a wait-and-retry fallback when only one key is configured (or when
-//!   every key is currently cooling down).
+//! - a wait-and-retry fallback when only one key is configured;
+//! - a fail-fast [`super::ProviderError::AllProvidersCoolingDown`] error
+//!   (instead of blocking) when every key is currently cooling down, so the
+//!   caller can requeue the work and move on rather than stalling.
 //!
 //! None of this requires any change to `GeminiProvider` (or any other
 //! provider), `State`, or `Model::translate_texts`.
@@ -18,18 +26,41 @@ use std::time::{Duration, Instant};
 
 use crate::Language;
 
-use super::{AnyProvider, ProviderError};
+use super::{AnyProvider, ProviderError, QuotaKind};
 
-/// Hard ceiling on total quota-related attempts (across all keys combined)
-/// before giving up for good. Protects against endlessly cycling through
-/// keys that are all permanently rate-limited or invalid.
+/// Hard ceiling on total quota-related attempts (across all keys combined,
+/// within a single `translate()` call) before giving up for good. Protects
+/// against endlessly cycling through keys that are all permanently
+/// rate-limited or invalid. Keys already in cooldown are skipped by
+/// `pick_available_slot` without counting against this — only fresh 429s do.
 const MAX_QUOTA_ATTEMPTS: u32 = 6;
 
-/// Used when the provider didn't send a `Retry-After` header.
-const DEFAULT_RETRY_WAIT: Duration = Duration::from_secs(60);
+/// Fallback wait for a [`QuotaKind::RateLimit`] (or [`QuotaKind::Unknown`])
+/// error when the provider didn't send a usable `retryDelay`. 60s matches
+/// Gemini's usual per-minute window.
+const DEFAULT_RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
 
-/// Upper bound on any single wait, regardless of what `Retry-After` says.
-const MAX_RETRY_WAIT: Duration = Duration::from_secs(5 * 60);
+/// Safety-net cap for a [`QuotaKind::RateLimit`] (or [`QuotaKind::Unknown`])
+/// error, regardless of what `retryDelay` says. Rate limits reset fast;
+/// anything claiming otherwise is almost certainly a mis-parse, so we don't
+/// honor it.
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5 * 60);
+
+/// Fallback wait for a [`QuotaKind::DailyQuota`] error when the provider
+/// didn't send a usable `retryDelay`. There's no reliable "time until the
+/// quota resets" available here without a timezone-aware clock, so this is
+/// a deliberately conservative middle ground: long enough that we're not
+/// hammering a key we already know is dead for a while, short enough that
+/// we don't sideline it for a full day purely on a guess.
+const DEFAULT_DAILY_QUOTA_WAIT: Duration = Duration::from_secs(60 * 60);
+
+/// Safety-net cap for a [`QuotaKind::DailyQuota`] error. Intentionally much
+/// larger than [`MAX_RATE_LIMIT_WAIT`] — Gemini's `retryDelay` for a real
+/// daily-quota error can legitimately be several hours, and clamping that
+/// down to minutes (the old behavior, when both kinds shared one cap) just
+/// meant the key got pulled back into rotation early and re-failed the same
+/// 429 over and over instead of actually resting until it recovers.
+const MAX_DAILY_QUOTA_WAIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 struct SlotState {
     cooldown_until: Option<Instant>,
@@ -43,12 +74,16 @@ struct Rotation {
 }
 
 pub struct ManagedProvider {
+    provider_name: String,
     providers: Vec<Box<dyn AnyProvider>>,
     rotation: Mutex<Rotation>,
 }
 
 impl ManagedProvider {
-    pub fn new(providers: Vec<Box<dyn AnyProvider>>) -> Self {
+    /// `provider_name` is used only for error/log messages (e.g.
+    /// `AllProvidersCoolingDown`) — pass whatever id this set of keys
+    /// belongs to (e.g. `"gemini"`).
+    pub fn new(provider_name: impl Into<String>, providers: Vec<Box<dyn AnyProvider>>) -> Self {
         let slots = providers
             .iter()
             .map(|_| SlotState {
@@ -56,6 +91,7 @@ impl ManagedProvider {
             })
             .collect();
         Self {
+            provider_name: provider_name.into(),
             providers,
             rotation: Mutex::new(Rotation { current: 0, slots }),
         }
@@ -69,7 +105,10 @@ impl ManagedProvider {
         let now = Instant::now();
         for offset in 0..total {
             let idx = (rotation.current + offset) % total;
-            if rotation.slots[idx].cooldown_until.is_none_or(|until| until <= now) {
+            if rotation.slots[idx]
+                .cooldown_until
+                .is_none_or(|until| until <= now)
+            {
                 rotation.current = idx;
                 return Some(idx);
             }
@@ -110,8 +149,13 @@ impl ManagedProvider {
             let index = match self.pick_available_slot() {
                 Some(idx) => idx,
                 None => {
-                    // Every key is cooling down: wait for whichever comes
-                    // back first, then loop and try again.
+                    // Every key is cooling down. Previously this slept for
+                    // the remaining cooldown and then looped internally —
+                    // which meant a single `translate()` call could block
+                    // for however long the longest cooldown was, silently,
+                    // instead of letting the caller (the page pipeline)
+                    // requeue the page and go work on something else in the
+                    // meantime. Fase 6: fail fast instead.
                     let now = Instant::now();
                     let wait = self
                         .earliest_cooldown()
@@ -119,10 +163,13 @@ impl ManagedProvider {
                         .saturating_duration_since(now);
                     tracing::warn!(
                         wait_secs = wait.as_secs(),
-                        "all keys cooling down, waiting"
+                        "all keys cooling down, giving up immediately"
                     );
-                    tokio::time::sleep(wait).await;
-                    continue;
+                    return Err(ProviderError::AllProvidersCoolingDown {
+                        provider: self.provider_name.clone(),
+                        retry_after: wait,
+                    }
+                    .into());
                 }
             };
 
@@ -134,13 +181,19 @@ impl ManagedProvider {
                 Err(err) => err,
             };
 
-            let Some(ProviderError::QuotaExceeded { retry_after, .. }) =
-                err.downcast_ref::<ProviderError>()
+            let Some(ProviderError::QuotaExceeded {
+                retry_after,
+                quota_kind,
+                ..
+            }) = err.downcast_ref::<ProviderError>()
             else {
                 // Not a quota error (auth failure, malformed request, etc.)
                 // — retrying/rotating wouldn't help, so bail immediately.
                 return Err(err);
             };
+
+            let retry_after = *retry_after;
+            let quota_kind = *quota_kind;
 
             attempts += 1;
             if attempts > MAX_QUOTA_ATTEMPTS {
@@ -151,21 +204,34 @@ impl ManagedProvider {
                 return Err(err);
             }
 
-            let wait = retry_after.unwrap_or(DEFAULT_RETRY_WAIT).min(MAX_RETRY_WAIT);
+            // Prefer the real `retry_after` Gemini gave us — it's accurate
+            // per-key, whereas the default below is just a blind guess.
+            // Which default/cap applies depends on *why* the key failed:
+            // a per-minute rate limit should come back fast; a daily quota
+            // should not. See the module-level doc comment.
+            let (default_wait, max_wait) = match quota_kind {
+                QuotaKind::DailyQuota => (DEFAULT_DAILY_QUOTA_WAIT, MAX_DAILY_QUOTA_WAIT),
+                QuotaKind::RateLimit | QuotaKind::Unknown => {
+                    (DEFAULT_RATE_LIMIT_WAIT, MAX_RATE_LIMIT_WAIT)
+                }
+            };
+            let wait = retry_after.unwrap_or(default_wait).min(max_wait);
             self.put_in_cooldown(index, wait);
 
             if multi_key {
-                tracing::warn!(
+                tracing::info!(
                     key_index = index,
                     wait_secs = wait.as_secs(),
+                    ?quota_kind,
                     "quota exceeded, rotating to next available key"
                 );
                 // Loop again — `pick_available_slot` will skip this one
                 // until its cooldown expires.
             } else {
-                tracing::warn!(
+                tracing::debug!(
                     attempt = attempts,
                     wait_secs = wait.as_secs(),
+                    ?quota_kind,
                     "quota exceeded, waiting before retry"
                 );
                 tokio::time::sleep(wait).await;

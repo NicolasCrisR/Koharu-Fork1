@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\build\mime_guess-0b5bf920e8423233\out\mime_types_generated.rs

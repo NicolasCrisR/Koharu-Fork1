@@ -13,6 +13,7 @@ pub mod config;
 pub mod google_fonts;
 pub mod history;
 pub mod llm;
+pub(crate) mod persistence;
 pub mod pipeline;
 pub mod projects;
 pub mod renderer;

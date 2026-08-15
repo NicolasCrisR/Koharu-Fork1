@@ -106,6 +106,13 @@ pub struct TextLayout<'a> {
     max_width: Option<f32>,
     max_height: Option<f32>,
     alignment: Option<TextAlign>,
+    /// Multiplier applied to the natural (font-metrics-derived) line height.
+    /// `1.0` (or `None`) matches today's behavior exactly.
+    line_spacing: Option<f32>,
+    /// Extra space (in layout units, same scale as `font_size`) inserted
+    /// after every grapheme cluster. `0.0` (or `None`) matches today's
+    /// behavior exactly.
+    letter_spacing: Option<f32>,
 }
 
 impl<'a> TextLayout<'a> {
@@ -120,11 +127,25 @@ impl<'a> TextLayout<'a> {
             max_width: None,
             max_height: None,
             alignment: None,
+            line_spacing: None,
+            letter_spacing: None,
         }
     }
 
     pub fn with_font_size(mut self, size: f32) -> Self {
         self.font_size = Some(size);
+        self
+    }
+
+    /// Set the line-height multiplier for this layout run.
+    pub fn with_line_spacing(mut self, multiplier: f32) -> Self {
+        self.line_spacing = Some(multiplier);
+        self
+    }
+
+    /// Set additional spacing after each grapheme cluster for this layout run.
+    pub fn with_letter_spacing(mut self, extra: f32) -> Self {
+        self.letter_spacing = Some(extra);
         self
     }
 
@@ -171,6 +192,51 @@ impl<'a> TextLayout<'a> {
     pub fn with_alignment(mut self, alignment: TextAlign) -> Self {
         self.alignment = Some(alignment);
         self
+    }
+
+    /// Adds `self.letter_spacing` to the advance of the last glyph in every
+    /// grapheme cluster of `shaped` (and to the run's aggregate advance, so
+    /// line-breaking/alignment/ink-bounds — which all read the aggregate —
+    /// stay consistent with the per-glyph positions). Combining marks within
+    /// a cluster are left untouched, so accents don't get pushed away from
+    /// their base character. No-op when spacing is `0.0`/unset.
+    fn apply_letter_spacing(&self, shaped: &mut ShapedRun<'a>) {
+        let spacing = self.letter_spacing.unwrap_or(0.0);
+        if spacing == 0.0 || shaped.glyphs.is_empty() {
+            return;
+        }
+
+        let vertical = self.writing_mode.is_vertical();
+        // RTL runs report negative x_advance; grow the run in its own
+        // reading direction rather than always adding a positive number.
+        let dir = if !vertical && shaped.x_advance < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        let delta = spacing * dir;
+
+        let len = shaped.glyphs.len();
+        let mut extra_total = 0.0f32;
+        for i in 0..len {
+            let is_cluster_end =
+                i + 1 == len || shaped.glyphs[i + 1].cluster != shaped.glyphs[i].cluster;
+            if !is_cluster_end {
+                continue;
+            }
+            extra_total += delta;
+            if vertical {
+                shaped.glyphs[i].y_advance += delta;
+            } else {
+                shaped.glyphs[i].x_advance += delta;
+            }
+        }
+
+        if vertical {
+            shaped.y_advance += extra_total;
+        } else {
+            shaped.x_advance += extra_total;
+        }
     }
 
     pub fn run(&self, text: &str) -> Result<LayoutRun<'a>> {
@@ -239,7 +305,8 @@ impl<'a> TextLayout<'a> {
         let metrics = font_ref.metrics(Size::new(font_size), LocationRef::default());
         let ascent = metrics.ascent;
         let descent = -metrics.descent;
-        let line_height = (ascent + descent + metrics.leading).max(font_size);
+        let line_height =
+            (ascent + descent + metrics.leading).max(font_size) * self.line_spacing.unwrap_or(1.0);
 
         let bidi_info = BidiInfo::new(text, None);
 
@@ -284,6 +351,7 @@ impl<'a> TextLayout<'a> {
             let mut runs = Vec::new();
             let mut advance = 0.0f32;
             for mut shaped in shape_script_runs(&shaper, suffix.as_str(), &fonts, &suffix_opts)? {
+                self.apply_letter_spacing(&mut shaped);
                 for glyph in &mut shaped.glyphs {
                     glyph.cluster += cluster as u32;
                 }
@@ -343,6 +411,8 @@ impl<'a> TextLayout<'a> {
                         for glyph in &mut shaped.glyphs {
                             glyph.cluster += run_start as u32;
                         }
+
+                        self.apply_letter_spacing(&mut shaped);
 
                         segment_advance += if self.writing_mode.is_vertical() {
                             shaped.y_advance.abs()
@@ -1079,6 +1149,32 @@ mod tests {
             assert_approx_eq(dy, line_height);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn custom_line_spacing_changes_baseline_distance() -> anyhow::Result<()> {
+        let font = any_system_font();
+        let normal = TextLayout::new(&font, Some(20.0)).run("A\nB")?;
+        let expanded = TextLayout::new(&font, Some(20.0))
+            .with_line_spacing(1.5)
+            .run("A\nB")?;
+
+        let normal_distance = normal.lines[1].baseline.1 - normal.lines[0].baseline.1;
+        let expanded_distance = expanded.lines[1].baseline.1 - expanded.lines[0].baseline.1;
+        assert!(expanded_distance > normal_distance);
+        Ok(())
+    }
+
+    #[test]
+    fn custom_letter_spacing_increases_line_advance() -> anyhow::Result<()> {
+        let font = any_system_font();
+        let normal = TextLayout::new(&font, Some(20.0)).run("ABCD")?;
+        let expanded = TextLayout::new(&font, Some(20.0))
+            .with_letter_spacing(2.0)
+            .run("ABCD")?;
+
+        assert!(expanded.lines[0].advance > normal.lines[0].advance);
         Ok(())
     }
 

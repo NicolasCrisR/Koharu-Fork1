@@ -35,6 +35,7 @@ chrono = { workspace = true }
 dashmap = { workspace = true }
 fs4 = { workspace = true }
 image = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
 inventory = { workspace = true }
 lru = { workspace = true }
 parking_lot = { workspace = true }
@@ -53,6 +54,8 @@ utoipa = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
 zip = { workspace = true }
+unicode-bidi = "0.3.18"
+skrifa = "0.42.1"
 
 [features]
 cuda = ["koharu-ml/cuda"]

@@ -227,6 +227,14 @@ pub struct TextStyle {
     pub stroke: Option<TextStrokeStyle>,
     #[serde(default)]
     pub text_align: Option<TextAlign>,
+    /// Multiplier applied to the font's natural line height. `None` is the
+    /// historical layout behavior (`1.0`). Persisted only in scene format V2.
+    #[serde(default)]
+    pub line_spacing: Option<f32>,
+    /// Extra layout units inserted after each grapheme cluster. `None` is the
+    /// historical layout behavior (`0.0`). Persisted only in scene format V2.
+    #[serde(default)]
+    pub letter_spacing: Option<f32>,
 }
 
 impl Default for TextStyle {
@@ -238,6 +246,8 @@ impl Default for TextStyle {
             effect: None,
             stroke: None,
             text_align: None,
+            line_spacing: None,
+            letter_spacing: None,
         }
     }
 }
@@ -297,6 +307,8 @@ mod tests {
             }),
             stroke: None,
             text_align: None,
+            line_spacing: None,
+            letter_spacing: None,
         };
         let bytes = postcard::to_allocvec(&style).expect("serialize");
         let decoded: TextStyle = postcard::from_bytes(&bytes).expect("deserialize");

@@ -9,6 +9,8 @@
 //! - `DELETE /projects/current` — close current session
 //! - `POST   /projects/current/export` — export current; returns bytes
 
+use std::collections::HashSet;
+
 use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
@@ -303,6 +305,7 @@ async fn export_current_project(
             let default_font_c = req.default_font.clone();
             let files = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                 let mut out = Vec::with_capacity(page_ids_c.len());
+                let mut used = HashSet::new();
                 for (i, id) in page_ids_c.iter().enumerate() {
                     let bytes = crate::psd_export::psd_bytes_for_page(
                         &session_c,
@@ -310,7 +313,8 @@ async fn export_current_project(
                         default_font_c.clone(),
                         *id,
                     )?;
-                    out.push((format!("page-{:03}-{id}.psd", i + 1), bytes));
+                    let filename = page_output_filename(&session_c, *id, "psd", i, &mut used);
+                    out.push((filename, bytes));
                 }
                 Ok(out)
             })
@@ -354,9 +358,11 @@ async fn export_image_role(
     let page_ids_c = page_ids.clone();
     let files = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut used = HashSet::new();
         for (i, id) in page_ids_c.iter().enumerate() {
             if let Some(bytes) = crate::psd_export::png_bytes_for_page(&session_c, *id, role)? {
-                out.push((format!("page-{:03}-{id}.png", i + 1), bytes));
+                let filename = page_output_filename(&session_c, *id, "png", i, &mut used);
+                out.push((filename, bytes));
             }
         }
         Ok(out)
@@ -389,6 +395,73 @@ fn resolve_page_ids(
             Ok(ids.to_vec())
         }
     }
+}
+
+/// Build the output filename for one exported page, preserving the
+/// original name the page was imported with (`Page::name` — set at
+/// `POST /pages` / `POST /pages/from-paths` time, see `routes/pages.rs`)
+/// instead of the old `page-{:03}` / `{:03}.png` numeric scheme.
+///
+/// `ext` is the *actual* encoded format of the bytes being written (e.g.
+/// `"png"` for a Rendered/Inpainted layer, `"psd"` for a PSD file). The
+/// original extension is dropped in favor of `ext` — keeping it would
+/// mislabel the file's real contents whenever the export format differs
+/// from how the source image was originally encoded (e.g. a page
+/// imported as `cena.webp` still renders out as PNG bytes, so the export
+/// is `cena.png`, not `cena.webp`). Everything else about the original
+/// name — the base/stem — is kept exactly as imported.
+///
+/// Falls back to the old zero-padded index only when the page has no
+/// usable name (shouldn't normally happen, since import always sets one).
+/// `used` tracks filenames already emitted in this export batch so two
+/// pages that happen to share an original name don't overwrite each
+/// other inside the same zip — the second one gets a `(2)`, `(3)`, ...
+/// suffix instead of silently clobbering the first.
+fn page_output_filename(
+    session: &std::sync::Arc<koharu_app::ProjectSession>,
+    id: PageId,
+    ext: &str,
+    index: usize,
+    used: &mut HashSet<String>,
+) -> String {
+    let stem = session
+        .scene
+        .read()
+        .page(id)
+        .map(|p| p.name.clone())
+        .filter(|n| !n.trim().is_empty())
+        .and_then(|name| {
+            std::path::Path::new(&name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(sanitize_filename_component)
+        })
+        .filter(|s| !s.is_empty());
+
+    let base = stem.unwrap_or_else(|| format!("{:03}", index + 1));
+    let mut filename = format!("{base}.{ext}");
+    let mut n = 2;
+    while used.contains(&filename) {
+        filename = format!("{base} ({n}).{ext}");
+        n += 1;
+    }
+    used.insert(filename.clone());
+    filename
+}
+
+/// Strip characters that are illegal in a filename on Windows/macOS/Linux
+/// (`/ \ : * ? " < > |` and control characters). Everything else — spaces,
+/// unicode, dashes, underscores, dots in the middle of the name — passes
+/// through untouched, so the original name is preserved as closely as the
+/// filesystem allows.
+fn sanitize_filename_component(name: &str) -> String {
+    name.chars()
+        .filter(|c| {
+            !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') && !c.is_control()
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 fn role_ext(role: ImageRole) -> &'static str {

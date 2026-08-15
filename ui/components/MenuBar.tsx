@@ -66,14 +66,16 @@ export function MenuBar() {
   const { t } = useTranslation()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<TabId>('appearance')
+  const continuousView = useEditorUiStore((s) => s.continuousView)
+  const setContinuousView = useEditorUiStore((s) => s.setContinuousView)
   const hasPage = useSelectionStore((s) => s.pageId !== null)
   const hasScene = useScene().scene !== null
   const shortcuts = usePreferencesStore((state) => state.shortcuts)
   const customPipeline = usePreferencesStore((state) => state.customPipeline)
   const setCustomPipeline = usePreferencesStore((state) => state.setCustomPipeline)
   const hasSelectedSteps = useMemo(
-    () => Object.values(customPipeline).some(Boolean),
-    [customPipeline],
+      () => Object.values(customPipeline).some(Boolean),
+      [customPipeline],
   )
   const isMac = useMemo(() => getPlatform() === 'mac', [])
 
@@ -122,8 +124,8 @@ export function MenuBar() {
     const prefs = usePreferencesStore.getState()
     const steps = [
       ...(prefs.customPipeline.detect
-        ? [p.detector, p.segmenter, p.bubble_segmenter, p.font_detector]
-        : []),
+          ? [p.detector, p.segmenter, p.bubble_segmenter, p.font_detector]
+          : []),
       prefs.customPipeline.ocr ? p.ocr : null,
       prefs.customPipeline.translator ? p.translator : null,
       prefs.customPipeline.inpainter ? p.inpainter : null,
@@ -179,292 +181,301 @@ export function MenuBar() {
   const isWindowsTauri = isTauri() && !isMac
 
   return (
-    <div className='flex h-8 items-center border-b border-border bg-background text-[13px] text-foreground'>
-      {isNativeMacOS && <MacOSControls />}
-      <div className='flex h-full items-center pl-2 select-none'>
-        <Image src='/icon.png' alt='Koharu' width={18} height={18} draggable={false} />
-      </div>
-      <Menubar className='h-auto gap-1 border-none bg-transparent p-0 px-1.5 shadow-none'>
-        <MenubarMenu>
-          <MenubarTrigger
-            data-testid='menu-file-trigger'
-            className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'
-          >
-            {t('menu.file')}
-          </MenubarTrigger>
-          <MenubarContent className='min-w-48' align='start' sideOffset={5} alignOffset={-3}>
-            <MenubarItem
-              data-testid='menu-file-open-files'
-              className='text-[13px]'
-              disabled={!hasScene}
-              onSelect={() => void importPages('replace', 'files')}
+      <div className='flex h-8 items-center border-b border-border bg-background text-[13px] text-foreground'>
+        {isNativeMacOS && <MacOSControls />}
+        <div className='flex h-full items-center pl-2 select-none'>
+          <Image src='/icon.png' alt='Koharu' width={18} height={18} draggable={false} />
+        </div>
+        <Menubar className='h-auto gap-1 border-none bg-transparent p-0 px-1.5 shadow-none'>
+          <MenubarMenu>
+            <MenubarTrigger
+                data-testid='menu-file-trigger'
+                className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'
             >
-              {t('menu.openFiles')}
-            </MenubarItem>
-            <MenubarItem
-              data-testid='menu-file-open-folder'
-              className='text-[13px]'
-              disabled={!hasScene}
-              onSelect={() => void importPages('replace', 'folder')}
-            >
-              {t('menu.openFolder')}
-            </MenubarItem>
-            <MenubarSeparator />
-            <MenubarItem
-              data-testid='menu-file-save-as'
-              className='text-[13px]'
-              disabled={!hasScene}
-              onSelect={() => void exportCurrentProjectAs('khr')}
-            >
-              {t('menu.saveAs')}
-            </MenubarItem>
-            <MenubarSeparator />
-            {exportItems.map((item) => (
+              {t('menu.file')}
+            </MenubarTrigger>
+            <MenubarContent className='min-w-48' align='start' sideOffset={5} alignOffset={-3}>
               <MenubarItem
-                key={item.label}
-                data-testid={item.testId}
-                className='text-[13px]'
-                disabled={item.disabled}
-                onSelect={item.onSelect ? () => void item.onSelect?.() : undefined}
+                  data-testid='menu-file-open-files'
+                  className='text-[13px]'
+                  disabled={!hasScene}
+                  onSelect={() => void importPages('replace', 'files')}
               >
-                {item.label}
+                {t('menu.openFiles')}
               </MenubarItem>
-            ))}
-            <MenubarSeparator />
-            <MenubarItem
-              data-testid='menu-file-close-project'
-              className='text-[13px]'
-              disabled={!hasScene}
-              onSelect={() => void closeProject()}
+              <MenubarItem
+                  data-testid='menu-file-open-folder'
+                  className='text-[13px]'
+                  disabled={!hasScene}
+                  onSelect={() => void importPages('replace', 'folder')}
+              >
+                {t('menu.openFolder')}
+              </MenubarItem>
+              <MenubarSeparator />
+              <MenubarItem
+                  data-testid='menu-file-save-as'
+                  className='text-[13px]'
+                  disabled={!hasScene}
+                  onSelect={() => void exportCurrentProjectAs('khr')}
+              >
+                {t('menu.saveAs')}
+              </MenubarItem>
+              <MenubarSeparator />
+              {exportItems.map((item) => (
+                  <MenubarItem
+                      key={item.label}
+                      data-testid={item.testId}
+                      className='text-[13px]'
+                      disabled={item.disabled}
+                      onSelect={item.onSelect ? () => void item.onSelect?.() : undefined}
+                  >
+                    {item.label}
+                  </MenubarItem>
+              ))}
+              <MenubarSeparator />
+              <MenubarItem
+                  data-testid='menu-file-close-project'
+                  className='text-[13px]'
+                  disabled={!hasScene}
+                  onSelect={() => void closeProject()}
+              >
+                {t('menu.closeProject')}
+              </MenubarItem>
+              <MenubarSeparator />
+              <MenubarItem
+                  className='text-[13px]'
+                  onSelect={() => {
+                    setSettingsTab('appearance')
+                    setSettingsOpen(true)
+                  }}
+              >
+                {t('menu.settings')}
+              </MenubarItem>
+            </MenubarContent>
+          </MenubarMenu>
+          <MenubarMenu>
+            <MenubarTrigger
+                data-testid='menu-edit-trigger'
+                className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'
             >
-              {t('menu.closeProject')}
-            </MenubarItem>
-            <MenubarSeparator />
-            <MenubarItem
-              className='text-[13px]'
-              onSelect={() => {
-                setSettingsTab('appearance')
-                setSettingsOpen(true)
-              }}
-            >
-              {t('menu.settings')}
-            </MenubarItem>
-          </MenubarContent>
-        </MenubarMenu>
-        <MenubarMenu>
-          <MenubarTrigger
-            data-testid='menu-edit-trigger'
-            className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'
-          >
-            {t('menu.edit')}
-          </MenubarTrigger>
-          <MenubarContent className='min-w-40' align='start' sideOffset={5} alignOffset={-3}>
-            <MenubarItem
-              data-testid='menu-edit-undo'
-              className='text-[13px]'
-              disabled={!hasScene}
-              onSelect={() => void undoOp()}
-            >
-              {t('menu.undo')}
-              <MenubarShortcut>{formatShortcutForDisplay(shortcuts.undo, isMac)}</MenubarShortcut>
-            </MenubarItem>
-            <MenubarItem
-              data-testid='menu-edit-redo'
-              className='text-[13px]'
-              disabled={!hasScene}
-              onSelect={() => void redoOp()}
-            >
-              {t('menu.redo')}
-              <MenubarShortcut>{formatShortcutForDisplay(shortcuts.redo, isMac)}</MenubarShortcut>
-            </MenubarItem>
-            <MenubarSeparator />
-            <MenubarItem
-              data-testid='menu-edit-select-all'
-              className='text-[13px]'
-              disabled={!hasPage}
-              onSelect={() => selectAllTextNodesOnCurrentPage()}
-            >
-              {t('menu.selectAll')}
-              <MenubarShortcut>{isMac ? '⌘A' : 'Ctrl+A'}</MenubarShortcut>
-            </MenubarItem>
-          </MenubarContent>
-        </MenubarMenu>
-        <MenubarMenu>
-          <MenubarTrigger className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'>
-            {t('menu.view')}
-          </MenubarTrigger>
-          <MenubarContent className='min-w-36' align='start' sideOffset={5} alignOffset={-3}>
-            <MenubarItem className='text-[13px]' onSelect={fitCanvasToViewport}>
-              {t('menu.fitWindow')}
-            </MenubarItem>
-            <MenubarItem className='text-[13px]' onSelect={resetCanvasScale}>
-              {t('menu.originalSize')}
-            </MenubarItem>
-          </MenubarContent>
-        </MenubarMenu>
+              {t('menu.edit')}
+            </MenubarTrigger>
+            <MenubarContent className='min-w-40' align='start' sideOffset={5} alignOffset={-3}>
+              <MenubarItem
+                  data-testid='menu-edit-undo'
+                  className='text-[13px]'
+                  disabled={!hasScene}
+                  onSelect={() => void undoOp()}
+              >
+                {t('menu.undo')}
+                <MenubarShortcut>{formatShortcutForDisplay(shortcuts.undo, isMac)}</MenubarShortcut>
+              </MenubarItem>
+              <MenubarItem
+                  data-testid='menu-edit-redo'
+                  className='text-[13px]'
+                  disabled={!hasScene}
+                  onSelect={() => void redoOp()}
+              >
+                {t('menu.redo')}
+                <MenubarShortcut>{formatShortcutForDisplay(shortcuts.redo, isMac)}</MenubarShortcut>
+              </MenubarItem>
+              <MenubarSeparator />
+              <MenubarItem
+                  data-testid='menu-edit-select-all'
+                  className='text-[13px]'
+                  disabled={!hasPage}
+                  onSelect={() => selectAllTextNodesOnCurrentPage()}
+              >
+                {t('menu.selectAll')}
+                <MenubarShortcut>{isMac ? '⌘A' : 'Ctrl+A'}</MenubarShortcut>
+              </MenubarItem>
+            </MenubarContent>
+          </MenubarMenu>
+          <MenubarMenu>
+            <MenubarTrigger className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'>
+              {t('menu.view')}
+            </MenubarTrigger>
+            <MenubarContent className='min-w-36' align='start' sideOffset={5} alignOffset={-3}>
+              <MenubarItem className='text-[13px]' onSelect={fitCanvasToViewport}>
+                {t('menu.fitWindow')}
+              </MenubarItem>
+              <MenubarItem className='text-[13px]' onSelect={resetCanvasScale}>
+                {t('menu.originalSize')}
+              </MenubarItem>
+              <MenubarSeparator />
+              <MenubarCheckboxItem
+                  data-testid='menu-view-continuous'
+                  className='text-[13px]'
+                  checked={continuousView}
+                  onCheckedChange={setContinuousView}
+              >
+                {t('menu.infiniteScroll')}
+              </MenubarCheckboxItem>
+            </MenubarContent>
+          </MenubarMenu>
 
-        <MenubarMenu>
-          <MenubarTrigger
-            data-testid='menu-process-trigger'
-            className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'
-          >
-            {t('menu.process')}
-          </MenubarTrigger>
-          <MenubarContent className='min-w-48' align='start' sideOffset={5} alignOffset={-3}>
-            <MenubarItem
-              data-testid='menu-process-current'
-              className='text-[13px]'
-              disabled={!hasPage}
-              onSelect={() => void runPipeline({ pageId: requirePageId() })}
+          <MenubarMenu>
+            <MenubarTrigger
+                data-testid='menu-process-trigger'
+                className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'
             >
-              {t('menu.processCurrent')}
-            </MenubarItem>
-            <MenubarItem
-              data-testid='menu-process-rerender'
-              className='text-[13px]'
-              disabled={!hasPage}
-              onSelect={() => void runInpaint(requirePageId())}
-            >
-              {t('menu.redoInpaintRender')}
-            </MenubarItem>
-            <MenubarItem
-              data-testid='menu-process-all'
-              className='text-[13px]'
-              disabled={!hasScene}
-              onSelect={() => void runPipeline({})}
-            >
-              {t('menu.processAll')}
-            </MenubarItem>
-            <MenubarSeparator />
-            <MenubarItem
-              className='text-[13px]'
-              disabled={!hasPage || !hasSelectedSteps}
-              onSelect={() => void runCustomPipeline({ pageId: requirePageId() })}
-            >
-              {t('menu.runCustomCurrent')}
-            </MenubarItem>
-            <MenubarItem
-              className='text-[13px]'
-              disabled={!hasScene || !hasSelectedSteps}
-              onSelect={() => void runCustomPipeline({})}
-            >
-              {t('menu.runCustomAll')}
-            </MenubarItem>
-            <MenubarSub>
-              <MenubarSubTrigger className='text-[13px]'>
-                {t('menu.customPipeline')}
-              </MenubarSubTrigger>
-              <MenubarSubContent className='min-w-48'>
-                <MenubarCheckboxItem
-                  className='text-[13px]'
-                  checked={customPipeline.detect}
-                  onCheckedChange={(checked) => setCustomPipeline({ detect: checked })}
-                  onSelect={(e) => e.preventDefault()}
-                >
-                  {t('processing.detect')}
-                </MenubarCheckboxItem>
-                <MenubarCheckboxItem
-                  className='text-[13px]'
-                  checked={customPipeline.ocr}
-                  onCheckedChange={(checked) => setCustomPipeline({ ocr: checked })}
-                  onSelect={(e) => e.preventDefault()}
-                >
-                  {t('processing.ocr')}
-                </MenubarCheckboxItem>
-                <MenubarCheckboxItem
-                  className='text-[13px]'
-                  checked={customPipeline.translator}
-                  onCheckedChange={(checked) => setCustomPipeline({ translator: checked })}
-                  onSelect={(e) => e.preventDefault()}
-                >
-                  {t('llm.generate')}
-                </MenubarCheckboxItem>
-                <MenubarCheckboxItem
-                  className='text-[13px]'
-                  checked={customPipeline.inpainter}
-                  onCheckedChange={(checked) => setCustomPipeline({ inpainter: checked })}
-                  onSelect={(e) => e.preventDefault()}
-                >
-                  {t('mask.inpaint')}
-                </MenubarCheckboxItem>
-                <MenubarCheckboxItem
-                  className='text-[13px]'
-                  checked={customPipeline.renderer}
-                  onCheckedChange={(checked) => setCustomPipeline({ renderer: checked })}
-                  onSelect={(e) => e.preventDefault()}
-                >
-                  {t('llm.render')}
-                </MenubarCheckboxItem>
-              </MenubarSubContent>
-            </MenubarSub>
-          </MenubarContent>
-        </MenubarMenu>
-        <MenubarMenu>
-          <MenubarTrigger className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'>
-            {t('menu.help')}
-          </MenubarTrigger>
-          <MenubarContent className='min-w-36' align='start' sideOffset={5} alignOffset={-3}>
-            {helpMenuItems.map((item) => (
+              {t('menu.process')}
+            </MenubarTrigger>
+            <MenubarContent className='min-w-48' align='start' sideOffset={5} alignOffset={-3}>
               <MenubarItem
-                key={item.label}
-                className='text-[13px]'
-                disabled={item.disabled}
-                onSelect={item.onSelect ? () => void item.onSelect?.() : undefined}
+                  data-testid='menu-process-current'
+                  className='text-[13px]'
+                  disabled={!hasPage}
+                  onSelect={() => void runPipeline({ pageId: requirePageId() })}
               >
-                {item.label}
+                {t('menu.processCurrent')}
               </MenubarItem>
-            ))}
-            <MenubarSeparator />
-            <MenubarItem
-              className='text-[13px]'
-              onSelect={() => {
-                setSettingsTab('about')
-                setSettingsOpen(true)
-              }}
-            >
-              {t('settings.about')}
-            </MenubarItem>
-          </MenubarContent>
-        </MenubarMenu>
-      </Menubar>
-      <div data-tauri-drag-region className='flex h-full flex-1 items-center justify-center' />
-      {isWindowsTauri && <WindowControls />}
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} defaultTab={settingsTab} />
-    </div>
+              <MenubarItem
+                  data-testid='menu-process-rerender'
+                  className='text-[13px]'
+                  disabled={!hasPage}
+                  onSelect={() => void runInpaint(requirePageId())}
+              >
+                {t('menu.redoInpaintRender')}
+              </MenubarItem>
+              <MenubarItem
+                  data-testid='menu-process-all'
+                  className='text-[13px]'
+                  disabled={!hasScene}
+                  onSelect={() => void runPipeline({})}
+              >
+                {t('menu.processAll')}
+              </MenubarItem>
+              <MenubarSeparator />
+              <MenubarItem
+                  className='text-[13px]'
+                  disabled={!hasPage || !hasSelectedSteps}
+                  onSelect={() => void runCustomPipeline({ pageId: requirePageId() })}
+              >
+                {t('menu.runCustomCurrent')}
+              </MenubarItem>
+              <MenubarItem
+                  className='text-[13px]'
+                  disabled={!hasScene || !hasSelectedSteps}
+                  onSelect={() => void runCustomPipeline({})}
+              >
+                {t('menu.runCustomAll')}
+              </MenubarItem>
+              <MenubarSub>
+                <MenubarSubTrigger className='text-[13px]'>
+                  {t('menu.customPipeline')}
+                </MenubarSubTrigger>
+                <MenubarSubContent className='min-w-48'>
+                  <MenubarCheckboxItem
+                      className='text-[13px]'
+                      checked={customPipeline.detect}
+                      onCheckedChange={(checked) => setCustomPipeline({ detect: checked })}
+                      onSelect={(e) => e.preventDefault()}
+                  >
+                    {t('processing.detect')}
+                  </MenubarCheckboxItem>
+                  <MenubarCheckboxItem
+                      className='text-[13px]'
+                      checked={customPipeline.ocr}
+                      onCheckedChange={(checked) => setCustomPipeline({ ocr: checked })}
+                      onSelect={(e) => e.preventDefault()}
+                  >
+                    {t('processing.ocr')}
+                  </MenubarCheckboxItem>
+                  <MenubarCheckboxItem
+                      className='text-[13px]'
+                      checked={customPipeline.translator}
+                      onCheckedChange={(checked) => setCustomPipeline({ translator: checked })}
+                      onSelect={(e) => e.preventDefault()}
+                  >
+                    {t('llm.generate')}
+                  </MenubarCheckboxItem>
+                  <MenubarCheckboxItem
+                      className='text-[13px]'
+                      checked={customPipeline.inpainter}
+                      onCheckedChange={(checked) => setCustomPipeline({ inpainter: checked })}
+                      onSelect={(e) => e.preventDefault()}
+                  >
+                    {t('mask.inpaint')}
+                  </MenubarCheckboxItem>
+                  <MenubarCheckboxItem
+                      className='text-[13px]'
+                      checked={customPipeline.renderer}
+                      onCheckedChange={(checked) => setCustomPipeline({ renderer: checked })}
+                      onSelect={(e) => e.preventDefault()}
+                  >
+                    {t('llm.render')}
+                  </MenubarCheckboxItem>
+                </MenubarSubContent>
+              </MenubarSub>
+            </MenubarContent>
+          </MenubarMenu>
+          <MenubarMenu>
+            <MenubarTrigger className='rounded px-3 py-1.5 font-medium hover:bg-accent data-[state=open]:bg-accent'>
+              {t('menu.help')}
+            </MenubarTrigger>
+            <MenubarContent className='min-w-36' align='start' sideOffset={5} alignOffset={-3}>
+              {helpMenuItems.map((item) => (
+                  <MenubarItem
+                      key={item.label}
+                      className='text-[13px]'
+                      disabled={item.disabled}
+                      onSelect={item.onSelect ? () => void item.onSelect?.() : undefined}
+                  >
+                    {item.label}
+                  </MenubarItem>
+              ))}
+              <MenubarSeparator />
+              <MenubarItem
+                  className='text-[13px]'
+                  onSelect={() => {
+                    setSettingsTab('about')
+                    setSettingsOpen(true)
+                  }}
+              >
+                {t('settings.about')}
+              </MenubarItem>
+            </MenubarContent>
+          </MenubarMenu>
+        </Menubar>
+        <div data-tauri-drag-region className='flex h-full flex-1 items-center justify-center' />
+        {isWindowsTauri && <WindowControls />}
+        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} defaultTab={settingsTab} />
+      </div>
   )
 }
 
 function MacOSControls() {
   return (
-    <div className='flex h-full items-center gap-2 pr-2 pl-4'>
-      <button
-        onClick={() => void windowControls.close()}
-        className='group flex size-3 items-center justify-center rounded-full bg-[#FF5F57] active:bg-[#bf4942]'
-      >
-        <XIcon
-          className='size-2 text-[#4a0002] opacity-0 group-hover:opacity-100'
-          strokeWidth={3}
-        />
-      </button>
-      <button
-        onClick={() => void windowControls.minimize()}
-        className='group flex size-3 items-center justify-center rounded-full bg-[#FEBC2E] active:bg-[#bf8d22]'
-      >
-        <MinusIcon
-          className='size-2 text-[#5f4a00] opacity-0 group-hover:opacity-100'
-          strokeWidth={3}
-        />
-      </button>
-      <button
-        onClick={() => void windowControls.toggleMaximize()}
-        className='group flex size-3 items-center justify-center rounded-full bg-[#28C840] active:bg-[#1e9630]'
-      >
-        <SquareIcon
-          className='size-1.5 text-[#006500] opacity-0 group-hover:opacity-100'
-          strokeWidth={3}
-        />
-      </button>
-    </div>
+      <div className='flex h-full items-center gap-2 pr-2 pl-4'>
+        <button
+            onClick={() => void windowControls.close()}
+            className='group flex size-3 items-center justify-center rounded-full bg-[#FF5F57] active:bg-[#bf4942]'
+        >
+          <XIcon
+              className='size-2 text-[#4a0002] opacity-0 group-hover:opacity-100'
+              strokeWidth={3}
+          />
+        </button>
+        <button
+            onClick={() => void windowControls.minimize()}
+            className='group flex size-3 items-center justify-center rounded-full bg-[#FEBC2E] active:bg-[#bf8d22]'
+        >
+          <MinusIcon
+              className='size-2 text-[#5f4a00] opacity-0 group-hover:opacity-100'
+              strokeWidth={3}
+          />
+        </button>
+        <button
+            onClick={() => void windowControls.toggleMaximize()}
+            className='group flex size-3 items-center justify-center rounded-full bg-[#28C840] active:bg-[#1e9630]'
+        >
+          <SquareIcon
+              className='size-1.5 text-[#006500] opacity-0 group-hover:opacity-100'
+              strokeWidth={3}
+          />
+        </button>
+      </div>
   )
 }
 
@@ -483,27 +494,27 @@ function WindowControls() {
   }, [updateMaximized])
 
   return (
-    <div className='flex h-full'>
-      <button
-        onClick={() => void windowControls.minimize()}
-        className='flex h-full w-11 items-center justify-center hover:bg-accent'
-      >
-        <MinusIcon className='size-4' />
-      </button>
-      <button
-        onClick={() => {
-          void windowControls.toggleMaximize().then(updateMaximized)
-        }}
-        className='flex h-full w-11 items-center justify-center hover:bg-accent'
-      >
-        {maximized ? <CopyIcon className='size-3.5' /> : <SquareIcon className='size-3.5' />}
-      </button>
-      <button
-        onClick={() => void windowControls.close()}
-        className='flex h-full w-11 items-center justify-center hover:bg-red-500 hover:text-white'
-      >
-        <XIcon className='size-4' />
-      </button>
-    </div>
+      <div className='flex h-full'>
+        <button
+            onClick={() => void windowControls.minimize()}
+            className='flex h-full w-11 items-center justify-center hover:bg-accent'
+        >
+          <MinusIcon className='size-4' />
+        </button>
+        <button
+            onClick={() => {
+              void windowControls.toggleMaximize().then(updateMaximized)
+            }}
+            className='flex h-full w-11 items-center justify-center hover:bg-accent'
+        >
+          {maximized ? <CopyIcon className='size-3.5' /> : <SquareIcon className='size-3.5' />}
+        </button>
+        <button
+            onClick={() => void windowControls.close()}
+            className='flex h-full w-11 items-center justify-center hover:bg-red-500 hover:text-white'
+        >
+          <XIcon className='size-4' />
+        </button>
+      </div>
   )
 }

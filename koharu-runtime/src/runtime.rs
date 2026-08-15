@@ -5,7 +5,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
+use reqwest_retry::{
+    RetryTransientMiddleware, Retryable, RetryableStrategy, default_on_request_failure,
+    default_on_request_success, policies::ExponentialBackoff,
+};
 use tokio::sync::broadcast;
 
 use crate::downloads::Downloads;
@@ -14,6 +17,37 @@ use crate::packages::PackageCatalog;
 const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 pub type RuntimeHttpClient = Arc<ClientWithMiddleware>;
+
+/// Custom retry strategy for the shared HTTP client.
+///
+/// The default `reqwest-retry` strategy treats HTTP 429 (Too Many Requests)
+/// as transient and retries it automatically — up to `max_retries` times,
+/// *before* the response ever reaches `ensure_provider_success` /
+/// `ManagedProvider`. For quota errors that's actively harmful: each one of
+/// `ManagedProvider`'s own `MAX_QUOTA_ATTEMPTS` attempts was silently turning
+/// into up to `max_retries` extra real HTTP calls against a key we already
+/// know has no quota left, which is the main reason page processing was
+/// taking minutes instead of seconds when several keys were exhausted.
+///
+/// This strategy carves out 429 as non-retryable at this layer (`Fatal`,
+/// i.e. "don't retry here") and delegates everything else — timeouts, 5xx,
+/// connection errors — to the crate's default behavior, which we still want.
+struct NoRetryOn429;
+
+impl RetryableStrategy for NoRetryOn429 {
+    fn handle(
+        &self,
+        res: &Result<reqwest::Response, reqwest_middleware::Error>,
+    ) -> Option<Retryable> {
+        match res {
+            Ok(response) if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                Some(Retryable::Fatal)
+            }
+            Ok(response) => default_on_request_success(response),
+            Err(error) => default_on_request_failure(error),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComputePolicy {
@@ -47,8 +81,9 @@ impl RuntimeHttpConfig {
             .build()?;
         Ok(Arc::new(
             ClientBuilder::new(base)
-                .with(RetryTransientMiddleware::new_with_policy(
+                .with(RetryTransientMiddleware::new_with_policy_and_strategy(
                     ExponentialBackoff::builder().build_with_max_retries(self.max_retries),
+                    NoRetryOn429,
                 ))
                 .build(),
         ))

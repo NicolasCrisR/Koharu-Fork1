@@ -4,7 +4,7 @@
 //! [`Renderer::render_page`], which rasterises each text block's translation
 //! into an RGBA sprite and composites them onto the inpainted plane.
 //!
-//! Pure output: the pipeline engine ([`crate::pipeline::engines::renderer`])
+//! Pure output: the pipeline engine ([`crate::pipeline::engines::pipeline_renderer`])
 //! takes a `RenderOutput` and translates sprites + final composite into ops.
 
 use std::{
@@ -13,7 +13,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use image::{DynamicImage, GrayImage, RgbaImage, imageops};
+use image::{DynamicImage, GrayImage, Rgba, RgbaImage, imageops};
 use koharu_core::{
     FontFaceInfo, FontPrediction, FontSource, NodeId, TextDirection, TextShaderEffect,
     TextStrokeStyle, TextStyle, Transform,
@@ -238,6 +238,8 @@ impl Renderer {
             effect: None,
             stroke: None,
             text_align: None,
+            line_spacing: None,
+            letter_spacing: None,
         });
         if style.font_families.is_empty()
             && let Some(font) = document_font
@@ -265,6 +267,12 @@ impl Renderer {
             .with_fallback_fonts(&self.symbol_fallbacks)
             .with_writing_mode(writing_mode)
             .with_alignment(align);
+        if let Some(line_spacing) = style.line_spacing {
+            layout_builder = layout_builder.with_line_spacing(line_spacing);
+        }
+        if let Some(letter_spacing) = style.letter_spacing {
+            layout_builder = layout_builder.with_letter_spacing(letter_spacing);
+        }
         if let Some(target_language) = target_language {
             layout_builder = layout_builder.with_hyphenation_language_tag(target_language);
         }
@@ -278,18 +286,44 @@ impl Renderer {
                 color,
             );
 
-            let rendered = self.renderer.render(
-                layout,
-                writing_mode,
-                &RenderOptions {
-                    font_size: layout.font_size,
-                    color,
-                    effect: shader_core_to_renderer(block_effect),
-                    stroke: resolved_stroke,
-                    raster,
-                    ..Default::default()
-                },
-            )?;
+            let raster_scale = raster.supersampling_factor.clamp(2, 4);
+            let rendered = self
+                .renderer
+                .render(
+                    layout,
+                    writing_mode,
+                    &RenderOptions {
+                        font_size: layout.font_size,
+                        color,
+                        effect: shader_core_to_renderer(block_effect),
+                        stroke: resolved_stroke,
+                        raster,
+                        ..Default::default()
+                    },
+                )
+                .with_context(|| {
+                    format!(
+                        "temporary renderer diagnostic: node_id={}, selected_font={}, \
+                         transform={:?}, layout_box={:?}, bubble_id={:?}, \
+                         text={translation:?}, layout_run={}x{} at font_size={}, \
+                         pre_render={}x{}, requested_supersampling={}, raster_scale={}, \
+                         final_raster={}x{}",
+                        block.node_id,
+                        font.post_script_name(),
+                        block.transform,
+                        layout_box,
+                        resolved_box.bubble_id,
+                        layout.width,
+                        layout.height,
+                        layout.font_size,
+                        layout.width,
+                        layout.height,
+                        raster.supersampling_factor,
+                        raster_scale,
+                        layout.width.ceil() * raster_scale as f32,
+                        layout.height.ceil() * raster_scale as f32,
+                    )
+                })?;
             let transform = centred_sprite_transform(
                 layout_box,
                 rendered.width(),
@@ -303,7 +337,7 @@ impl Renderer {
         };
 
         if let Some((mask, bubble_id)) = bubble_mask.zip(resolved_box.bubble_id) {
-            let candidate = fit_rendered_with_mask_collision(
+            let mut candidate = fit_rendered_with_mask_collision(
                 &layout_builder,
                 translation,
                 layout_box,
@@ -314,6 +348,7 @@ impl Renderer {
                 bubble_id,
                 &mut render_candidate,
             )?;
+            apply_block_rotation(&mut candidate, layout_box, block.transform.rotation_deg);
             return Ok(Some(RenderedBlock {
                 node_id: block.node_id,
                 sprite: DynamicImage::ImageRgba8(candidate.image),
@@ -332,7 +367,8 @@ impl Renderer {
             max_font,
         )?;
 
-        let candidate = render_candidate(&layout)?;
+        let mut candidate = render_candidate(&layout)?;
+        apply_block_rotation(&mut candidate, layout_box, block.transform.rotation_deg);
 
         Ok(Some(RenderedBlock {
             node_id: block.node_id,
@@ -994,7 +1030,126 @@ fn centred_sprite_transform(
         rotation_deg,
     }
 }
+/// Rotates a rendered text sprite in place to match the block's stored
+/// `rotation_deg`, expanding the canvas so glyphs aren't clipped, and
+/// re-centres `candidate.transform` on the same anchor box.
+///
+/// Before this step `rotation_deg` only rotated the placement *box* shown
+/// while editing (see `TextBlockLayer.tsx` in the UI) — the composited
+/// glyph pixels themselves never turned with it, so a rotated block's text
+/// appeared to sit still while its selection outline spun around it.
+fn apply_block_rotation(
+    candidate: &mut RenderedTextCandidate,
+    layout_box: LayoutBox,
+    rotation_deg: f32,
+) {
+    let normalized = ((rotation_deg % 360.0) + 360.0) % 360.0;
+    // Skip work (and the resample cost) for the common unrotated case.
+    if normalized < 0.05 || normalized > 359.95 {
+        return;
+    }
+    let rotated = rotate_rgba_expand(&candidate.image, normalized);
+    candidate.transform =
+        centred_sprite_transform(layout_box, rotated.width(), rotated.height(), rotation_deg);
+    candidate.image = rotated;
+}
 
+/// Rotates `img` clockwise by `degrees` about its own center, expanding the
+/// output canvas to the rotated bounding box so no glyph pixels are cropped.
+/// Samples with premultiplied-alpha bilinear interpolation to avoid dark
+/// fringing where opaque glyph pixels meet the sprite's transparent
+/// background.
+fn rotate_rgba_expand(img: &RgbaImage, degrees: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let theta = degrees.to_radians();
+    let (sin_t, cos_t) = theta.sin_cos();
+    let wf = w as f32;
+    let hf = h as f32;
+
+    // Bounding box of the source rectangle's corners after rotation.
+    let new_w = ((wf * cos_t.abs() + hf * sin_t.abs()).ceil() as u32).max(1);
+    let new_h = ((wf * sin_t.abs() + hf * cos_t.abs()).ceil() as u32).max(1);
+
+    let mut out = RgbaImage::new(new_w, new_h);
+    let cx = wf / 2.0;
+    let cy = hf / 2.0;
+    let ncx = new_w as f32 / 2.0;
+    let ncy = new_h as f32 / 2.0;
+
+    for oy in 0..new_h {
+        for ox in 0..new_w {
+            let dx = ox as f32 + 0.5 - ncx;
+            let dy = oy as f32 + 0.5 - ncy;
+            // Inverse-map the destination pixel back into source space
+            // (rotate by -theta) and sample there.
+            let sx = dx * cos_t + dy * sin_t + cx;
+            let sy = -dx * sin_t + dy * cos_t + cy;
+            if let Some(px) = sample_bilinear_premultiplied(img, sx, sy) {
+                out.put_pixel(ox, oy, px);
+            }
+        }
+    }
+    out
+}
+
+/// Bilinear-samples `img` at fractional coordinates `(x, y)` (pixel centers
+/// at integer + 0.5), working in premultiplied alpha so partially-covered
+/// edges blend toward "nothing" instead of toward whatever RGB happens to
+/// sit in fully-transparent neighboring pixels. Returns `None` well outside
+/// the source bounds.
+fn sample_bilinear_premultiplied(img: &RgbaImage, x: f32, y: f32) -> Option<Rgba<u8>> {
+    let (w, h) = img.dimensions();
+    if x < -1.0 || y < -1.0 || x > w as f32 || y > h as f32 {
+        return None;
+    }
+    let x0 = x.floor();
+    let y0 = y.floor();
+    let fx = x - x0;
+    let fy = y - y0;
+    let x0i = x0 as i64;
+    let y0i = y0 as i64;
+
+    let get = |ix: i64, iy: i64| -> [f32; 4] {
+        if ix < 0 || iy < 0 || ix >= w as i64 || iy >= h as i64 {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+        let p = img.get_pixel(ix as u32, iy as u32);
+        let a = p[3] as f32 / 255.0;
+        [
+            p[0] as f32 * a,
+            p[1] as f32 * a,
+            p[2] as f32 * a,
+            p[3] as f32,
+        ]
+    };
+
+    let p00 = get(x0i, y0i);
+    let p10 = get(x0i + 1, y0i);
+    let p01 = get(x0i, y0i + 1);
+    let p11 = get(x0i + 1, y0i + 1);
+
+    let mut out = [0.0f32; 4];
+    for c in 0..4 {
+        let top = p00[c] * (1.0 - fx) + p10[c] * fx;
+        let bottom = p01[c] * (1.0 - fx) + p11[c] * fx;
+        out[c] = top * (1.0 - fy) + bottom * fy;
+    }
+
+    let a = out[3] / 255.0;
+    let unpremul = |v: f32| {
+        if a > 0.001 {
+            (v / a).round().clamp(0.0, 255.0) as u8
+        } else {
+            0
+        }
+    };
+    Some(Rgba([
+        unpremul(out[0]),
+        unpremul(out[1]),
+        unpremul(out[2]),
+        out[3].round().clamp(0.0, 255.0) as u8,
+    ]))
+}
 fn find_input(blocks: &[RenderBlockInput], id: NodeId) -> &RenderBlockInput {
     blocks
         .iter()
@@ -1076,6 +1231,8 @@ mod tests {
             effect: None,
             stroke: None,
             text_align: None,
+            line_spacing: None,
+            letter_spacing: None,
         };
         let prediction = FontPrediction {
             text_color: [12, 34, 56],
@@ -1096,6 +1253,8 @@ mod tests {
             effect: None,
             stroke: None,
             text_align: None,
+            line_spacing: None,
+            letter_spacing: None,
         };
         let prediction = FontPrediction {
             text_color: [12, 34, 56],
@@ -1335,4 +1494,37 @@ mod tests {
         assert_eq!(transform.x, 150.0);
         assert_eq!(transform.y, 125.0);
     }
+}
+#[test]
+fn rotate_rgba_expand_swaps_dimensions_at_90_degrees() {
+    let img = RgbaImage::from_pixel(40, 20, Rgba([255, 0, 0, 255]));
+    let rotated = rotate_rgba_expand(&img, 90.0);
+    assert!((rotated.width() as i64 - 20).abs() <= 1);
+    assert!((rotated.height() as i64 - 40).abs() <= 1);
+}
+
+#[test]
+fn rotate_rgba_expand_preserves_opaque_pixel_alpha() {
+    let img = RgbaImage::from_pixel(30, 30, Rgba([10, 20, 30, 255]));
+    let rotated = rotate_rgba_expand(&img, 45.0);
+    let (cx, cy) = (rotated.width() / 2, rotated.height() / 2);
+    let center = rotated.get_pixel(cx, cy);
+    assert_eq!(center[3], 255);
+}
+
+#[test]
+fn apply_block_rotation_skips_near_zero_rotation() {
+    let img = RgbaImage::from_pixel(10, 10, Rgba([1, 2, 3, 255]));
+    let layout_box = LayoutBox {
+        x: 0.0,
+        y: 0.0,
+        width: 10.0,
+        height: 10.0,
+    };
+    let mut candidate = RenderedTextCandidate {
+        image: img.clone(),
+        transform: centred_sprite_transform(layout_box, 10, 10, 0.0),
+    };
+    apply_block_rotation(&mut candidate, layout_box, 0.0);
+    assert_eq!(candidate.image.dimensions(), img.dimensions());
 }

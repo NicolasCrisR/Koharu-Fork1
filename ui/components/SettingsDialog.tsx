@@ -22,6 +22,7 @@ import {
   LogInIcon,
   LogOutIcon,
   SparklesIcon,
+  XIcon,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -122,6 +123,10 @@ function appConfigToPatch(cfg: AppConfig): ConfigPatch {
       id: p.id,
       baseUrl: p.base_url ?? null,
       apiKey: p.api_key ?? null,
+      // Always echo the current list back — `appConfig` is kept in sync
+      // with the backend after every save, so this is idempotent unless
+      // our own add/remove handlers changed it locally first.
+      apiKeys: p.api_keys ?? [],
     }))
   }
   return patch
@@ -156,10 +161,10 @@ const DEFAULT_HTTP_READ_TIMEOUT = 300
 const DEFAULT_HTTP_MAX_RETRIES = 3
 
 export function SettingsDialog({
-  open,
-  onOpenChange,
-  defaultTab = 'appearance',
-}: SettingsDialogProps) {
+                                 open,
+                                 onOpenChange,
+                                 defaultTab = 'appearance',
+                               }: SettingsDialogProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<TabId>(defaultTab)
@@ -223,7 +228,7 @@ export function SettingsDialog({
     if (!appConfig?.data) return
     setDataPathDraft(appConfig.data.path)
     setHttpConnectTimeoutDraft(
-      String(appConfig.http?.connect_timeout ?? DEFAULT_HTTP_CONNECT_TIMEOUT),
+        String(appConfig.http?.connect_timeout ?? DEFAULT_HTTP_CONNECT_TIMEOUT),
     )
     setHttpReadTimeoutDraft(String(appConfig.http?.read_timeout ?? DEFAULT_HTTP_READ_TIMEOUT))
     setHttpMaxRetriesDraft(String(appConfig.http?.max_retries ?? DEFAULT_HTTP_MAX_RETRIES))
@@ -251,6 +256,35 @@ export function SettingsDialog({
     if (idx >= 0) providers[idx] = updater(current)
     else providers.push(updater(current))
     setAppConfig({ ...appConfig, providers })
+  }
+
+  const [apiKeysDrafts, setApiKeysDrafts] = useState<Record<string, string>>({})
+
+  // Multiple keys per provider, for round-robin rotation when one hits a
+  // rate limit — separate from the single legacy `api_key` above, which
+  // stays in the OS keyring. These live in `config.toml` as plain text.
+  const handleAddApiKey = async (id: string) => {
+    const value = (apiKeysDrafts[id] ?? '').trim()
+    if (!value || !appConfig) return
+    const providers = [...(appConfig.providers ?? [])]
+    const idx = providers.findIndex((p) => p.id === id)
+    const current = idx >= 0 ? providers[idx] : { id }
+    const nextKeys = [...(current.api_keys ?? []), value]
+    const updated = { ...current, api_keys: nextKeys }
+    if (idx >= 0) providers[idx] = updated
+    else providers.push(updated)
+    await persistConfig({ ...appConfig, providers })
+    setApiKeysDrafts((d) => ({ ...d, [id]: '' }))
+  }
+
+  const handleRemoveApiKey = async (id: string, index: number) => {
+    if (!appConfig) return
+    const providers = [...(appConfig.providers ?? [])]
+    const idx = providers.findIndex((p) => p.id === id)
+    if (idx < 0) return
+    const nextKeys = (providers[idx].api_keys ?? []).filter((_, i) => i !== index)
+    providers[idx] = { ...providers[idx], api_keys: nextKeys }
+    await persistConfig({ ...appConfig, providers })
   }
 
   const handleApplyStorageSettings = async () => {
@@ -305,142 +339,146 @@ export function SettingsDialog({
   }
 
   const storageSettingsUnchanged =
-    dataPathDraft.trim() === appConfig?.data?.path &&
-    httpConnectTimeoutDraft.trim() ===
+      dataPathDraft.trim() === appConfig?.data?.path &&
+      httpConnectTimeoutDraft.trim() ===
       String(appConfig?.http?.connect_timeout ?? DEFAULT_HTTP_CONNECT_TIMEOUT) &&
-    httpReadTimeoutDraft.trim() ===
+      httpReadTimeoutDraft.trim() ===
       String(appConfig?.http?.read_timeout ?? DEFAULT_HTTP_READ_TIMEOUT) &&
-    httpMaxRetriesDraft.trim() === String(appConfig?.http?.max_retries ?? DEFAULT_HTTP_MAX_RETRIES)
+      httpMaxRetriesDraft.trim() === String(appConfig?.http?.max_retries ?? DEFAULT_HTTP_MAX_RETRIES)
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='flex h-[600px] max-h-[85vh] w-[760px] max-w-[92vw] flex-col gap-0 overflow-hidden p-0'>
-        <DialogTitle className='sr-only'>{t('settings.title')}</DialogTitle>
-        <DialogDescription className='sr-only'>Settings</DialogDescription>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className='flex h-[600px] max-h-[85vh] w-[760px] max-w-[92vw] flex-col gap-0 overflow-hidden p-0'>
+          <DialogTitle className='sr-only'>{t('settings.title')}</DialogTitle>
+          <DialogDescription className='sr-only'>Settings</DialogDescription>
 
-        <div className='flex h-full'>
-          {/* Sidebar */}
-          <nav className='flex w-[180px] shrink-0 flex-col gap-1 border-r border-border bg-muted/30 p-3'>
-            <p className='mb-3 px-3 text-[10px] font-semibold tracking-widest text-muted-foreground uppercase'>
-              {t('settings.title')}
-            </p>
-            {TABS.map(({ id, icon: Icon, labelKey }) => (
-              <button
-                key={id}
-                onClick={() => setTab(id)}
-                data-active={tab === id}
-                className='flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground transition hover:text-foreground data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
-              >
-                <Icon className='size-4 shrink-0' />
-                {t(labelKey)}
-              </button>
-            ))}
-          </nav>
+          <div className='flex h-full'>
+            {/* Sidebar */}
+            <nav className='flex w-[180px] shrink-0 flex-col gap-1 border-r border-border bg-muted/30 p-3'>
+              <p className='mb-3 px-3 text-[10px] font-semibold tracking-widest text-muted-foreground uppercase'>
+                {t('settings.title')}
+              </p>
+              {TABS.map(({ id, icon: Icon, labelKey }) => (
+                  <button
+                      key={id}
+                      onClick={() => setTab(id)}
+                      data-active={tab === id}
+                      className='flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground transition hover:text-foreground data-[active=true]:bg-accent data-[active=true]:text-accent-foreground'
+                  >
+                    <Icon className='size-4 shrink-0' />
+                    {t(labelKey)}
+                  </button>
+              ))}
+            </nav>
 
-          {/* Content */}
-          <ScrollArea className='min-h-0 flex-1'>
-            <div className='p-6'>
-              {tab === 'appearance' && <AppearancePane />}
-              {tab === 'engines' && engineCatalog && appConfig && (
-                <EnginesPane
-                  catalog={engineCatalog}
-                  pipeline={appConfig.pipeline ?? {}}
-                  onChange={(pipeline) => {
-                    const next = { ...appConfig, pipeline }
-                    setAppConfig(next)
-                    void persistConfig(next)
-                  }}
-                />
-              )}
-              {tab === 'providers' && (
-                <ProvidersPane
-                  catalogs={providerCatalogs}
-                  config={appConfig}
-                  drafts={apiKeyDrafts}
-                  onBaseUrlChange={(id, v) =>
-                    upsertProvider(id, (p) => ({
-                      ...p,
-                      base_url: v || null,
-                    }))
-                  }
-                  onBaseUrlBlur={() => appConfig && void persistConfig(appConfig)}
-                  onApiKeyChange={(id, v) => setApiKeyDrafts((c) => ({ ...c, [id]: v }))}
-                  onSaveKey={(id) => {
-                    const key = apiKeyDrafts[id]?.trim()
-                    if (!key || !appConfig) return
-                    const providers = [...(appConfig.providers ?? [])]
-                    const idx = providers.findIndex((p) => p.id === id)
-                    const current = idx >= 0 ? providers[idx] : { id }
-                    const updated = { ...current, api_key: key }
-                    if (idx >= 0) providers[idx] = updated
-                    else providers.push(updated)
-                    void persistConfig({ ...appConfig, providers }).then(() =>
-                      setApiKeyDrafts((c) => {
-                        const n = { ...c }
-                        delete n[id]
-                        return n
-                      }),
-                    )
-                  }}
-                  onClearKey={(id) => {
-                    if (!appConfig) return
-                    const providers = [...(appConfig.providers ?? [])]
-                    const idx = providers.findIndex((p) => p.id === id)
-                    if (idx >= 0) providers[idx] = { ...providers[idx], api_key: null }
-                    void persistConfig({ ...appConfig, providers }).then(() =>
-                      setApiKeyDrafts((c) => {
-                        const n = { ...c }
-                        delete n[id]
-                        return n
-                      }),
-                    )
-                  }}
-                />
-              )}
-              {tab === 'ai' && <CodexSettingsPane />}
-              {tab === 'runtime' && (
-                <StoragePane
-                  dataPath={dataPathDraft}
-                  httpConnectTimeout={httpConnectTimeoutDraft}
-                  httpReadTimeout={httpReadTimeoutDraft}
-                  httpMaxRetries={httpMaxRetriesDraft}
-                  error={storageSettingsError}
-                  saving={isSavingStorageSettings}
-                  unchanged={storageSettingsUnchanged}
-                  onPathChange={(v) => {
-                    setDataPathDraft(v)
-                    setStorageSettingsError(null)
-                  }}
-                  onHttpConnectTimeoutChange={(v) => {
-                    setHttpConnectTimeoutDraft(v)
-                    setStorageSettingsError(null)
-                  }}
-                  onHttpReadTimeoutChange={(v) => {
-                    setHttpReadTimeoutDraft(v)
-                    setStorageSettingsError(null)
-                  }}
-                  onHttpMaxRetriesChange={(v) => {
-                    setHttpMaxRetriesDraft(v)
-                    setStorageSettingsError(null)
-                  }}
-                  onApply={() => void handleApplyStorageSettings()}
-                />
-              )}
-              {tab === 'keybinds' && <KeybindsPane />}
-              {tab === 'about' && (
-                <AboutPane
-                  version={appVersion}
-                  latestVersion={updater.latestVersion}
-                  status={updater.status}
-                  isInstallingUpdate={updater.isInstalling}
-                  onInstallUpdate={() => void updater.installUpdate()}
-                />
-              )}
-            </div>
-          </ScrollArea>
-        </div>
-      </DialogContent>
-    </Dialog>
+            {/* Content */}
+            <ScrollArea className='min-h-0 flex-1'>
+              <div className='p-6'>
+                {tab === 'appearance' && <AppearancePane />}
+                {tab === 'engines' && engineCatalog && appConfig && (
+                    <EnginesPane
+                        catalog={engineCatalog}
+                        pipeline={appConfig.pipeline ?? {}}
+                        onChange={(pipeline) => {
+                          const next = { ...appConfig, pipeline }
+                          setAppConfig(next)
+                          void persistConfig(next)
+                        }}
+                    />
+                )}
+                {tab === 'providers' && (
+                    <ProvidersPane
+                        catalogs={providerCatalogs}
+                        config={appConfig}
+                        drafts={apiKeyDrafts}
+                        onBaseUrlChange={(id, v) =>
+                            upsertProvider(id, (p) => ({
+                              ...p,
+                              base_url: v || null,
+                            }))
+                        }
+                        onBaseUrlBlur={() => appConfig && void persistConfig(appConfig)}
+                        onApiKeyChange={(id, v) => setApiKeyDrafts((c) => ({ ...c, [id]: v }))}
+                        onSaveKey={(id) => {
+                          const key = apiKeyDrafts[id]?.trim()
+                          if (!key || !appConfig) return
+                          const providers = [...(appConfig.providers ?? [])]
+                          const idx = providers.findIndex((p) => p.id === id)
+                          const current = idx >= 0 ? providers[idx] : { id }
+                          const updated = { ...current, api_key: key }
+                          if (idx >= 0) providers[idx] = updated
+                          else providers.push(updated)
+                          void persistConfig({ ...appConfig, providers }).then(() =>
+                              setApiKeyDrafts((c) => {
+                                const n = { ...c }
+                                delete n[id]
+                                return n
+                              }),
+                          )
+                        }}
+                        onClearKey={(id) => {
+                          if (!appConfig) return
+                          const providers = [...(appConfig.providers ?? [])]
+                          const idx = providers.findIndex((p) => p.id === id)
+                          if (idx >= 0) providers[idx] = { ...providers[idx], api_key: null }
+                          void persistConfig({ ...appConfig, providers }).then(() =>
+                              setApiKeyDrafts((c) => {
+                                const n = { ...c }
+                                delete n[id]
+                                return n
+                              }),
+                          )
+                        }}
+                        keyDrafts={apiKeysDrafts}
+                        onKeyDraftChange={(id, v) => setApiKeysDrafts((c) => ({ ...c, [id]: v }))}
+                        onAddKey={handleAddApiKey}
+                        onRemoveKey={handleRemoveApiKey}
+                    />
+                )}
+                {tab === 'ai' && <CodexSettingsPane />}
+                {tab === 'runtime' && (
+                    <StoragePane
+                        dataPath={dataPathDraft}
+                        httpConnectTimeout={httpConnectTimeoutDraft}
+                        httpReadTimeout={httpReadTimeoutDraft}
+                        httpMaxRetries={httpMaxRetriesDraft}
+                        error={storageSettingsError}
+                        saving={isSavingStorageSettings}
+                        unchanged={storageSettingsUnchanged}
+                        onPathChange={(v) => {
+                          setDataPathDraft(v)
+                          setStorageSettingsError(null)
+                        }}
+                        onHttpConnectTimeoutChange={(v) => {
+                          setHttpConnectTimeoutDraft(v)
+                          setStorageSettingsError(null)
+                        }}
+                        onHttpReadTimeoutChange={(v) => {
+                          setHttpReadTimeoutDraft(v)
+                          setStorageSettingsError(null)
+                        }}
+                        onHttpMaxRetriesChange={(v) => {
+                          setHttpMaxRetriesDraft(v)
+                          setStorageSettingsError(null)
+                        }}
+                        onApply={() => void handleApplyStorageSettings()}
+                    />
+                )}
+                {tab === 'keybinds' && <KeybindsPane />}
+                {tab === 'about' && (
+                    <AboutPane
+                        version={appVersion}
+                        latestVersion={updater.latestVersion}
+                        status={updater.status}
+                        isInstallingUpdate={updater.isInstalling}
+                        onInstallUpdate={() => void updater.installUpdate()}
+                    />
+                )}
+              </div>
+            </ScrollArea>
+          </div>
+        </DialogContent>
+      </Dialog>
   )
 }
 
@@ -457,48 +495,48 @@ function AppearancePane() {
   const { theme, setTheme } = useTheme()
   const locales = useMemo(() => supportedLanguages, [])
   return (
-    <div className='space-y-8'>
-      <Section title={t('settings.theme')}>
-        <div className='grid grid-cols-3 gap-3'>
-          {THEMES.map(({ value, icon: Icon, labelKey }) => (
-            <button
-              key={value}
-              onClick={() => setTheme(value)}
-              data-active={theme === value}
-              className='flex flex-col items-center gap-2 rounded-xl border border-border bg-card px-4 py-4 text-muted-foreground transition hover:border-foreground/30 data-[active=true]:border-primary data-[active=true]:text-foreground'
-            >
-              <Icon className='size-5' />
-              <span className='text-xs font-medium'>{t(labelKey)}</span>
-            </button>
-          ))}
-        </div>
-      </Section>
-
-      <Section title={t('settings.language')}>
-        <Select value={i18n.language} onValueChange={(v) => i18n.changeLanguage(v)}>
-          <SelectTrigger className='w-full'>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {locales.map((code) => (
-              <SelectItem key={code} value={code}>
-                {t(`menu.languages.${code}`, { defaultValue: code })}
-              </SelectItem>
+      <div className='space-y-8'>
+        <Section title={t('settings.theme')}>
+          <div className='grid grid-cols-3 gap-3'>
+            {THEMES.map(({ value, icon: Icon, labelKey }) => (
+                <button
+                    key={value}
+                    onClick={() => setTheme(value)}
+                    data-active={theme === value}
+                    className='flex flex-col items-center gap-2 rounded-xl border border-border bg-card px-4 py-4 text-muted-foreground transition hover:border-foreground/30 data-[active=true]:border-primary data-[active=true]:text-foreground'
+                >
+                  <Icon className='size-5' />
+                  <span className='text-xs font-medium'>{t(labelKey)}</span>
+                </button>
             ))}
-          </SelectContent>
-        </Select>
-      </Section>
-    </div>
+          </div>
+        </Section>
+
+        <Section title={t('settings.language')}>
+          <Select value={i18n.language} onValueChange={(v) => i18n.changeLanguage(v)}>
+            <SelectTrigger className='w-full'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {locales.map((code) => (
+                  <SelectItem key={code} value={code}>
+                    {t(`menu.languages.${code}`, { defaultValue: code })}
+                  </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Section>
+      </div>
   )
 }
 
 // ── Engines ──────────────────────────────────────────────────────
 
 function EnginesPane({
-  catalog,
-  pipeline,
-  onChange,
-}: {
+                       catalog,
+                       pipeline,
+                       onChange,
+                     }: {
   catalog: GetEngineCatalog200
   pipeline: import('@/lib/api/schemas').PipelineConfig
   onChange: (pipeline: import('@/lib/api/schemas').PipelineConfig) => void
@@ -545,44 +583,48 @@ function EnginesPane({
   ]
 
   return (
-    <div className='space-y-4'>
-      <p className='text-xs text-muted-foreground'>{t('settings.enginesDescription')}</p>
-      {sections.map(({ label, key, engines }) => (
-        <div key={key} className='space-y-1.5'>
-          <Label className='text-xs'>{label}</Label>
-          <Select
-            value={pipeline[key] ?? engines[0]?.id ?? ''}
-            onValueChange={(v) => onChange({ ...pipeline, [key]: v })}
-          >
-            <SelectTrigger className='w-full'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {engines.map((e) => (
-                <SelectItem key={e.id} value={e.id}>
-                  {e.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      ))}
-    </div>
+      <div className='space-y-4'>
+        <p className='text-xs text-muted-foreground'>{t('settings.enginesDescription')}</p>
+        {sections.map(({ label, key, engines }) => (
+            <div key={key} className='space-y-1.5'>
+              <Label className='text-xs'>{label}</Label>
+              <Select
+                  value={pipeline[key] ?? engines[0]?.id ?? ''}
+                  onValueChange={(v) => onChange({ ...pipeline, [key]: v })}
+              >
+                <SelectTrigger className='w-full'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {engines.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.name}
+                      </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+        ))}
+      </div>
   )
 }
 
 // ── Providers ─────────────────────────────────────────────────────
 
 function ProvidersPane({
-  catalogs,
-  config,
-  drafts,
-  onBaseUrlChange,
-  onBaseUrlBlur,
-  onApiKeyChange,
-  onSaveKey,
-  onClearKey,
-}: {
+                         catalogs,
+                         config,
+                         drafts,
+                         onBaseUrlChange,
+                         onBaseUrlBlur,
+                         onApiKeyChange,
+                         onSaveKey,
+                         onClearKey,
+                         keyDrafts,
+                         onKeyDraftChange,
+                         onAddKey,
+                         onRemoveKey,
+                       }: {
   catalogs: LlmProviderCatalog[]
   config: UpdateConfigBody | null
   drafts: Record<string, string>
@@ -591,99 +633,171 @@ function ProvidersPane({
   onApiKeyChange: (id: string, v: string) => void
   onSaveKey: (id: string) => void
   onClearKey: (id: string) => void
+  keyDrafts: Record<string, string>
+  onKeyDraftChange: (id: string, v: string) => void
+  onAddKey: (id: string) => void
+  onRemoveKey: (id: string, index: number) => void
 }) {
   const { t } = useTranslation()
 
   if (!catalogs.length)
     return (
-      <p className='py-12 text-center text-sm text-muted-foreground'>
-        {t('settings.loadingProviders')}
-      </p>
+        <p className='py-12 text-center text-sm text-muted-foreground'>
+          {t('settings.loadingProviders')}
+        </p>
     )
 
   return (
-    <div className='space-y-6'>
-      <Section title={t('settings.apiKeys')} description={t('settings.providersDescription')}>
-        <Accordion type='multiple' className='-mx-1'>
-          {catalogs.map((provider) => {
-            const cfg = config?.providers?.find((p) => p.id === provider.id)
-            const draft = drafts[provider.id] ?? ''
-            const hasDraft = draft.trim().length > 0
-            const statusColor =
-              provider.status === 'ready'
-                ? 'bg-green-500'
-                : provider.status === 'missing_configuration'
-                  ? 'bg-amber-400'
-                  : provider.status === 'discovery_failed'
-                    ? 'bg-red-500'
-                    : 'bg-muted-foreground'
+      <div className='space-y-6'>
+        <Section title={t('settings.apiKeys')} description={t('settings.providersDescription')}>
+          <Accordion type='multiple' className='-mx-1'>
+            {catalogs.map((provider) => {
+              const cfg = config?.providers?.find((p) => p.id === provider.id)
+              const draft = drafts[provider.id] ?? ''
+              const hasDraft = draft.trim().length > 0
+              const statusColor =
+                  provider.status === 'ready'
+                      ? 'bg-green-500'
+                      : provider.status === 'missing_configuration'
+                          ? 'bg-amber-400'
+                          : provider.status === 'discovery_failed'
+                              ? 'bg-red-500'
+                              : 'bg-muted-foreground'
 
-            return (
-              <AccordionItem key={provider.id} value={provider.id} className='border-border'>
-                <AccordionTrigger className='px-1 py-3 hover:no-underline'>
-                  <div className='flex items-center gap-2.5'>
-                    <span className={`size-2 shrink-0 rounded-full ${statusColor}`} />
-                    <span className='text-sm font-medium'>{provider.name}</span>
-                  </div>
-                </AccordionTrigger>
-                <AccordionContent className='space-y-4 px-1 pt-1 pb-4'>
-                  {provider.error && (
-                    <p className='text-xs text-muted-foreground'>{provider.error}</p>
-                  )}
+              return (
+                  <AccordionItem key={provider.id} value={provider.id} className='border-border'>
+                    <AccordionTrigger className='px-1 py-3 hover:no-underline'>
+                      <div className='flex items-center gap-2.5'>
+                        <span className={`size-2 shrink-0 rounded-full ${statusColor}`} />
+                        <span className='text-sm font-medium'>{provider.name}</span>
+                      </div>
+                    </AccordionTrigger>
+                    <AccordionContent className='space-y-4 px-1 pt-1 pb-4'>
+                      {provider.error && (
+                          <p className='text-xs text-muted-foreground'>{provider.error}</p>
+                      )}
 
-                  {provider.requiresBaseUrl && (
-                    <div className='space-y-1.5'>
-                      <Label className='text-xs'>{t('settings.localLlmBaseUrl')}</Label>
-                      <Input
-                        type='url'
-                        value={cfg?.base_url ?? ''}
-                        onChange={(e) => onBaseUrlChange(provider.id, e.target.value)}
-                        onBlur={onBaseUrlBlur}
-                        placeholder='https://api.example.com/v1'
-                      />
-                    </div>
-                  )}
+                      {provider.requiresBaseUrl && (
+                          <div className='space-y-1.5'>
+                            <Label className='text-xs'>{t('settings.localLlmBaseUrl')}</Label>
+                            <Input
+                                type='url'
+                                value={cfg?.base_url ?? ''}
+                                onChange={(e) => onBaseUrlChange(provider.id, e.target.value)}
+                                onBlur={onBaseUrlBlur}
+                                placeholder='https://api.example.com/v1'
+                            />
+                          </div>
+                      )}
 
-                  <div className='space-y-1.5'>
-                    <Label className='text-xs'>{t('settings.apiKey')}</Label>
-                    <div className='flex gap-2'>
-                      <Input
-                        type='password'
-                        value={draft}
-                        onChange={(e) => onApiKeyChange(provider.id, e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && hasDraft) onSaveKey(provider.id)
-                        }}
-                        placeholder={
-                          cfg?.api_key === '[REDACTED]'
-                            ? t('settings.apiKeyPlaceholderStored')
-                            : t('settings.apiKeyPlaceholderEmpty')
-                        }
-                        className='[&::-ms-reveal]:hidden'
-                      />
-                      {hasDraft ? (
-                        <Button size='sm' onClick={() => onSaveKey(provider.id)}>
-                          {t('settings.apiKeySave')}
-                        </Button>
-                      ) : cfg?.api_key === '[REDACTED]' ? (
-                        <Button
-                          variant='destructive'
-                          size='sm'
-                          onClick={() => onClearKey(provider.id)}
-                        >
-                          {t('settings.apiKeyClear')}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            )
-          })}
-        </Accordion>
-      </Section>
-    </div>
+                      <div className='space-y-1.5'>
+                        <Label className='text-xs'>{t('settings.apiKey')}</Label>
+                        <div className='flex gap-2'>
+                          <Input
+                              type='password'
+                              value={draft}
+                              onChange={(e) => onApiKeyChange(provider.id, e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && hasDraft) onSaveKey(provider.id)
+                              }}
+                              placeholder={
+                                cfg?.api_key === '[REDACTED]'
+                                    ? t('settings.apiKeyPlaceholderStored')
+                                    : t('settings.apiKeyPlaceholderEmpty')
+                              }
+                              className='[&::-ms-reveal]:hidden'
+                          />
+                          {hasDraft ? (
+                              <Button size='sm' onClick={() => onSaveKey(provider.id)}>
+                                {t('settings.apiKeySave')}
+                              </Button>
+                          ) : cfg?.api_key === '[REDACTED]' ? (
+                              <Button
+                                  variant='destructive'
+                                  size='sm'
+                                  onClick={() => onClearKey(provider.id)}
+                              >
+                                {t('settings.apiKeyClear')}
+                              </Button>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {/* Multiple keys, for round-robin rotation when one hits a
+                      rate limit — separate from the single key above, which
+                      lives in the OS keyring. These are stored as plain
+                      text in config.toml. */}
+                      <div className='space-y-1.5 border-t border-border pt-3'>
+                        <div className='flex items-center justify-between'>
+                          <Label className='text-xs'>{t('settings.apiKeysExtra')}</Label>
+                          <span className='text-[11px] text-muted-foreground'>
+                        {t('settings.apiKeysExtraCount', { count: cfg?.api_keys?.length ?? 0 })}
+                      </span>
+                        </div>
+                        <p className='text-[11px] text-muted-foreground'>
+                          {t('settings.apiKeysExtraDescription')}
+                        </p>
+
+                        {(cfg?.api_keys ?? []).length > 0 && (
+                            <ul className='space-y-1'>
+                              {(cfg?.api_keys ?? []).map((key, index) => (
+                                  <li
+                                      key={index}
+                                      className='flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2 py-1'
+                                  >
+                            <span className='font-mono text-xs text-muted-foreground'>
+                              {maskApiKey(key)}
+                            </span>
+                                    <Button
+                                        type='button'
+                                        variant='ghost'
+                                        size='icon-xs'
+                                        aria-label={t('settings.apiKeysExtraRemove')}
+                                        onClick={() => onRemoveKey(provider.id, index)}
+                                    >
+                                      <XIcon className='size-3.5' />
+                                    </Button>
+                                  </li>
+                              ))}
+                            </ul>
+                        )}
+
+                        <div className='flex gap-2'>
+                          <Input
+                              type='password'
+                              value={keyDrafts[provider.id] ?? ''}
+                              onChange={(e) => onKeyDraftChange(provider.id, e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && (keyDrafts[provider.id] ?? '').trim()) {
+                                  onAddKey(provider.id)
+                                }
+                              }}
+                              placeholder={t('settings.apiKeysExtraPlaceholder')}
+                              className='[&::-ms-reveal]:hidden'
+                          />
+                          <Button
+                              size='sm'
+                              disabled={!(keyDrafts[provider.id] ?? '').trim()}
+                              onClick={() => onAddKey(provider.id)}
+                          >
+                            {t('settings.apiKeysExtraAdd')}
+                          </Button>
+                        </div>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+              )
+            })}
+          </Accordion>
+        </Section>
+      </div>
   )
+}
+
+/** Shows only the last 4 characters — e.g. `sk-••••••••ab12`. */
+function maskApiKey(key: string): string {
+  if (key.length <= 4) return '••••'
+  return `${'•'.repeat(Math.min(key.length - 4, 10))}${key.slice(-4)}`
 }
 
 // ── Keybinds ──────────────────────────────────────────────────────
@@ -722,7 +836,7 @@ function CodexSettingsPane() {
   }, [auth?.accountId, loginStatus, signedIn, t])
 
   const invalidateAuth = () =>
-    queryClient.invalidateQueries({ queryKey: getGetCodexAuthStatusQueryKey() })
+      queryClient.invalidateQueries({ queryKey: getGetCodexAuthStatusQueryKey() })
 
   const handleSignIn = async () => {
     setBusy(true)
@@ -762,110 +876,110 @@ function CodexSettingsPane() {
   }
 
   return (
-    <Section title={t('settings.codex')} description={t('settings.codexDescription')}>
-      <div className='rounded-md border border-amber-200/70 bg-amber-50/80 p-3 text-xs leading-relaxed text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-100'>
-        {t('settings.codexTwoFactorDescription')}
-      </div>
-      <div className='rounded-md border border-border bg-card p-3'>
-        <div className='flex items-center justify-between gap-3'>
-          <div className='flex min-w-0 items-center gap-2'>
-            <div className='flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary'>
-              <SparklesIcon className='size-4' />
-            </div>
-            <div className='min-w-0'>
-              <div className='text-sm font-medium text-foreground'>Codex</div>
-              <div className='truncate text-xs text-muted-foreground'>{statusLabel}</div>
-            </div>
-          </div>
-          {signedIn ? (
-            <Button
-              variant='outline'
-              size='sm'
-              className='gap-1.5'
-              disabled={busy}
-              onClick={() => void handleLogout()}
-            >
-              <LogOutIcon className='size-3.5' />
-              {t('ai.signOut')}
-            </Button>
-          ) : (
-            <Button
-              variant='default'
-              size='sm'
-              className='gap-1.5'
-              disabled={busy}
-              onClick={() => void handleSignIn()}
-            >
-              {busy ? (
-                <LoaderIcon className='size-3.5 animate-spin' />
-              ) : (
-                <LogInIcon className='size-3.5' />
-              )}
-              {t('ai.signIn')}
-            </Button>
-          )}
+      <Section title={t('settings.codex')} description={t('settings.codexDescription')}>
+        <div className='rounded-md border border-amber-200/70 bg-amber-50/80 p-3 text-xs leading-relaxed text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-100'>
+          {t('settings.codexTwoFactorDescription')}
         </div>
-        {(actionError || (auth?.login?.status === 'failed' && auth.login.error)) && (
-          <p className='mt-2 line-clamp-3 text-xs text-destructive'>
-            {actionError || auth?.login?.error}
-          </p>
-        )}
-      </div>
-
-      <Dialog open={loginOpen} onOpenChange={setLoginOpen}>
-        <DialogContent className='w-[340px] max-w-[92vw] gap-3 p-4'>
-          <DialogTitle className='text-sm'>{t('ai.signInTitle')}</DialogTitle>
-          <DialogDescription className='sr-only'>{t('ai.signIn')}</DialogDescription>
-          <div className='flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2'>
-            <div className='min-w-0'>
-              <div className='text-[10px] font-semibold tracking-wide text-muted-foreground uppercase'>
-                {t('ai.userCode')}
+        <div className='rounded-md border border-border bg-card p-3'>
+          <div className='flex items-center justify-between gap-3'>
+            <div className='flex min-w-0 items-center gap-2'>
+              <div className='flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary'>
+                <SparklesIcon className='size-4' />
               </div>
-              <div className='mt-0.5 font-mono text-xl font-semibold tracking-widest'>
-                {login?.userCode ?? '...'}
+              <div className='min-w-0'>
+                <div className='text-sm font-medium text-foreground'>Codex</div>
+                <div className='truncate text-xs text-muted-foreground'>{statusLabel}</div>
               </div>
             </div>
-            <Button
-              variant='outline'
-              size='icon-sm'
-              disabled={!login}
-              aria-label={copied ? t('common.copied') : t('common.copy')}
-              onClick={() => void handleCopyCode()}
-            >
-              <CopyIcon className='size-3.5' />
-            </Button>
-          </div>
-          <Button
-            variant='outline'
-            size='sm'
-            className='w-full gap-1.5'
-            disabled={!login}
-            onClick={() => login && void openExternalUrl(login.verificationUrl)}
-          >
-            <ExternalLinkIcon className='size-3.5' />
-            {t('ai.openBrowser')}
-          </Button>
-          <div className='flex items-center gap-2 text-xs text-muted-foreground'>
-            {signedIn || loginStatus === 'succeeded' ? (
-              <>
-                <CheckCircleIcon className='size-4 text-green-500' />
-                {t('ai.signInComplete')}
-              </>
-            ) : loginStatus === 'failed' ? (
-              <>
-                <AlertCircleIcon className='size-4 text-destructive' />
-                <span className='line-clamp-2'>{auth?.login?.error ?? t('ai.signInFailed')}</span>
-              </>
+            {signedIn ? (
+                <Button
+                    variant='outline'
+                    size='sm'
+                    className='gap-1.5'
+                    disabled={busy}
+                    onClick={() => void handleLogout()}
+                >
+                  <LogOutIcon className='size-3.5' />
+                  {t('ai.signOut')}
+                </Button>
             ) : (
-              <>
-                <LoaderIcon className='size-4 animate-spin' />
-                {t('ai.signInPending')}
-              </>
+                <Button
+                    variant='default'
+                    size='sm'
+                    className='gap-1.5'
+                    disabled={busy}
+                    onClick={() => void handleSignIn()}
+                >
+                  {busy ? (
+                      <LoaderIcon className='size-3.5 animate-spin' />
+                  ) : (
+                      <LogInIcon className='size-3.5' />
+                  )}
+                  {t('ai.signIn')}
+                </Button>
             )}
           </div>
-        </DialogContent>
-      </Dialog>
-    </Section>
+          {(actionError || (auth?.login?.status === 'failed' && auth.login.error)) && (
+              <p className='mt-2 line-clamp-3 text-xs text-destructive'>
+                {actionError || auth?.login?.error}
+              </p>
+          )}
+        </div>
+
+        <Dialog open={loginOpen} onOpenChange={setLoginOpen}>
+          <DialogContent className='w-[340px] max-w-[92vw] gap-3 p-4'>
+            <DialogTitle className='text-sm'>{t('ai.signInTitle')}</DialogTitle>
+            <DialogDescription className='sr-only'>{t('ai.signIn')}</DialogDescription>
+            <div className='flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2'>
+              <div className='min-w-0'>
+                <div className='text-[10px] font-semibold tracking-wide text-muted-foreground uppercase'>
+                  {t('ai.userCode')}
+                </div>
+                <div className='mt-0.5 font-mono text-xl font-semibold tracking-widest'>
+                  {login?.userCode ?? '...'}
+                </div>
+              </div>
+              <Button
+                  variant='outline'
+                  size='icon-sm'
+                  disabled={!login}
+                  aria-label={copied ? t('common.copied') : t('common.copy')}
+                  onClick={() => void handleCopyCode()}
+              >
+                <CopyIcon className='size-3.5' />
+              </Button>
+            </div>
+            <Button
+                variant='outline'
+                size='sm'
+                className='w-full gap-1.5'
+                disabled={!login}
+                onClick={() => login && void openExternalUrl(login.verificationUrl)}
+            >
+              <ExternalLinkIcon className='size-3.5' />
+              {t('ai.openBrowser')}
+            </Button>
+            <div className='flex items-center gap-2 text-xs text-muted-foreground'>
+              {signedIn || loginStatus === 'succeeded' ? (
+                  <>
+                    <CheckCircleIcon className='size-4 text-green-500' />
+                    {t('ai.signInComplete')}
+                  </>
+              ) : loginStatus === 'failed' ? (
+                  <>
+                    <AlertCircleIcon className='size-4 text-destructive' />
+                    <span className='line-clamp-2'>{auth?.login?.error ?? t('ai.signInFailed')}</span>
+                  </>
+              ) : (
+                  <>
+                    <LoaderIcon className='size-4 animate-spin' />
+                    {t('ai.signInPending')}
+                  </>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      </Section>
   )
 }
 
@@ -909,8 +1023,8 @@ function KeybindsPane() {
   }, [pendingShortcuts])
 
   const isDirty = useMemo(
-    () => !areShortcutsEqual(shortcuts, pendingShortcuts),
-    [shortcuts, pendingShortcuts],
+      () => !areShortcutsEqual(shortcuts, pendingShortcuts),
+      [shortcuts, pendingShortcuts],
   )
 
   // Sync from store if it changes (e.g. externally via Reset)
@@ -1022,139 +1136,139 @@ function KeybindsPane() {
     const parts = shortcutStr.split('+')
 
     return parts.map((part, i) => (
-      <Fragment key={i}>
-        <Kbd className={kbdClass}>{part}</Kbd>
-        {i < parts.length - 1 && <span className='text-muted-foreground'>+</span>}
-      </Fragment>
+        <Fragment key={i}>
+          <Kbd className={kbdClass}>{part}</Kbd>
+          {i < parts.length - 1 && <span className='text-muted-foreground'>+</span>}
+        </Fragment>
     ))
   }
 
   return (
-    <div className='flex h-full flex-col gap-6'>
-      <div className='grow space-y-6 overflow-y-auto pr-2'>
-        <Section title={t('settings.keybinds')} description={t('settings.keybindsDescription')}>
-          <div className='divide-y divide-border overflow-hidden rounded-xl border border-border bg-card'>
-            {SHORTCUT_ITEMS.map((item) => {
-              const currentVal = pendingShortcuts[item.key]
-              const hasConflict = currentVal && (conflictCounts.get(currentVal) || 0) > 1
-              const conflictingItem = hasConflict
-                ? SHORTCUT_ITEMS.find(
-                    (s) => s.key !== item.key && pendingShortcuts[s.key] === currentVal,
-                  )
-                : null
+      <div className='flex h-full flex-col gap-6'>
+        <div className='grow space-y-6 overflow-y-auto pr-2'>
+          <Section title={t('settings.keybinds')} description={t('settings.keybindsDescription')}>
+            <div className='divide-y divide-border overflow-hidden rounded-xl border border-border bg-card'>
+              {SHORTCUT_ITEMS.map((item) => {
+                const currentVal = pendingShortcuts[item.key]
+                const hasConflict = currentVal && (conflictCounts.get(currentVal) || 0) > 1
+                const conflictingItem = hasConflict
+                    ? SHORTCUT_ITEMS.find(
+                        (s) => s.key !== item.key && pendingShortcuts[s.key] === currentVal,
+                    )
+                    : null
 
-              return (
-                <div key={item.key} className='flex items-center justify-between px-4 py-2'>
-                  <div className='flex items-center gap-2'>
-                    <span className='text-sm'>{t(item.labelKey)}</span>
-                    {hasConflict && (
-                      <div
-                        title={`${t('settings.shortcutConflict')}${
-                          conflictingItem ? `: ${t(conflictingItem.labelKey)}` : ''
-                        }`}
-                      >
-                        <AlertTriangleIcon className='size-3.5 text-amber-500' />
+                return (
+                    <div key={item.key} className='flex items-center justify-between px-4 py-2'>
+                      <div className='flex items-center gap-2'>
+                        <span className='text-sm'>{t(item.labelKey)}</span>
+                        {hasConflict && (
+                            <div
+                                title={`${t('settings.shortcutConflict')}${
+                                    conflictingItem ? `: ${t(conflictingItem.labelKey)}` : ''
+                                }`}
+                            >
+                              <AlertTriangleIcon className='size-3.5 text-amber-500' />
+                            </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                  <Button
-                    variant={recordingKey === item.key ? 'secondary' : 'ghost'}
-                    size='sm'
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setRecordingKey(item.key)
-                    }}
-                    className='group h-8 w-fit px-2 font-mono uppercase'
-                  >
-                    <div className='flex items-center gap-1'>
-                      {recordingKey === item.key ? (
-                        error ? (
-                          <span className='text-xs text-destructive'>{error}</span>
-                        ) : liveShortcut ? (
-                          renderShortcutKeys(liveShortcut)
-                        ) : (
-                          <span className='text-xs text-muted-foreground italic'>
+                      <Button
+                          variant={recordingKey === item.key ? 'secondary' : 'ghost'}
+                          size='sm'
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setRecordingKey(item.key)
+                          }}
+                          className='group h-8 w-fit px-2 font-mono uppercase'
+                      >
+                        <div className='flex items-center gap-1'>
+                          {recordingKey === item.key ? (
+                              error ? (
+                                  <span className='text-xs text-destructive'>{error}</span>
+                              ) : liveShortcut ? (
+                                  renderShortcutKeys(liveShortcut)
+                              ) : (
+                                  <span className='text-xs text-muted-foreground italic'>
                             {t('settings.shortcutPressKey')}
                           </span>
-                        )
-                      ) : currentVal ? (
-                        renderShortcutKeys(currentVal, 'bg-background')
-                      ) : (
-                        <span className='text-xs text-muted-foreground'>NONE</span>
-                      )}
+                              )
+                          ) : currentVal ? (
+                              renderShortcutKeys(currentVal, 'bg-background')
+                          ) : (
+                              <span className='text-xs text-muted-foreground'>NONE</span>
+                          )}
+                        </div>
+                      </Button>
                     </div>
-                  </Button>
-                </div>
-              )
-            })}
-          </div>
-        </Section>
-      </div>
-
-      <div className='flex items-center justify-between border-t border-border pt-4'>
-        <Button
-          variant='ghost'
-          size='sm'
-          className='gap-2 text-muted-foreground hover:text-foreground'
-          onClick={handleReset}
-        >
-          <RotateCcwIcon className='size-4' />
-          {t('settings.shortcutReset')}
-        </Button>
-        <div className='flex items-center gap-2'>
-          <Button
-            variant='default'
-            size='sm'
-            disabled={!isDirty || isSaved}
-            onClick={handleSave}
-            className='min-w-32 gap-2'
-          >
-            {isSaved ? (
-              <>
-                <CheckCircleIcon className='size-4' />
-                {t('common.saved')}
-              </>
-            ) : (
-              <>
-                <SaveIcon className='size-4' />
-                {t('common.save')}
-              </>
-            )}
-          </Button>
+                )
+              })}
+            </div>
+          </Section>
         </div>
-      </div>
-      <AlertDialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogTitle>{t('settings.shortcutReset')}</AlertDialogTitle>
-          <AlertDialogDescription>{t('settings.shortcutResetDescription')}</AlertDialogDescription>
-          <div className='flex justify-end gap-2'>
-            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmReset}>
-              {t('common.confirm')}
-            </AlertDialogAction>
+
+        <div className='flex items-center justify-between border-t border-border pt-4'>
+          <Button
+              variant='ghost'
+              size='sm'
+              className='gap-2 text-muted-foreground hover:text-foreground'
+              onClick={handleReset}
+          >
+            <RotateCcwIcon className='size-4' />
+            {t('settings.shortcutReset')}
+          </Button>
+          <div className='flex items-center gap-2'>
+            <Button
+                variant='default'
+                size='sm'
+                disabled={!isDirty || isSaved}
+                onClick={handleSave}
+                className='min-w-32 gap-2'
+            >
+              {isSaved ? (
+                  <>
+                    <CheckCircleIcon className='size-4' />
+                    {t('common.saved')}
+                  </>
+              ) : (
+                  <>
+                    <SaveIcon className='size-4' />
+                    {t('common.save')}
+                  </>
+              )}
+            </Button>
           </div>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+        </div>
+        <AlertDialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogTitle>{t('settings.shortcutReset')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('settings.shortcutResetDescription')}</AlertDialogDescription>
+            <div className='flex justify-end gap-2'>
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <AlertDialogAction onClick={handleConfirmReset}>
+                {t('common.confirm')}
+              </AlertDialogAction>
+            </div>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
   )
 }
 
 // ── Storage ───────────────────────────────────────────────────────
 
 function StoragePane({
-  dataPath,
-  httpConnectTimeout,
-  httpReadTimeout,
-  httpMaxRetries,
-  error,
-  saving,
-  unchanged,
-  onPathChange,
-  onHttpConnectTimeoutChange,
-  onHttpReadTimeoutChange,
-  onHttpMaxRetriesChange,
-  onApply,
-}: {
+                       dataPath,
+                       httpConnectTimeout,
+                       httpReadTimeout,
+                       httpMaxRetries,
+                       error,
+                       saving,
+                       unchanged,
+                       onPathChange,
+                       onHttpConnectTimeoutChange,
+                       onHttpReadTimeoutChange,
+                       onHttpMaxRetriesChange,
+                       onApply,
+                     }: {
   dataPath: string
   httpConnectTimeout: string
   httpReadTimeout: string
@@ -1172,106 +1286,106 @@ function StoragePane({
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   return (
-    <>
-      <Section title={t('settings.runtime')} description={t('settings.runtimeDescription')}>
-        <div className='space-y-1.5'>
-          <Label className='text-xs'>{t('settings.dataPath')}</Label>
-          <Input type='text' value={dataPath} onChange={(e) => onPathChange(e.target.value)} />
-          <p className='text-xs leading-relaxed text-muted-foreground'>
-            {t('settings.dataPathDescription')}
-          </p>
-        </div>
-
-        <div className='grid gap-4 md:grid-cols-2'>
+      <>
+        <Section title={t('settings.runtime')} description={t('settings.runtimeDescription')}>
           <div className='space-y-1.5'>
-            <Label className='text-xs'>{t('settings.httpConnectTimeout')}</Label>
-            <Input
-              type='number'
-              min='1'
-              step='1'
-              inputMode='numeric'
-              value={httpConnectTimeout}
-              onChange={(e) => onHttpConnectTimeoutChange(e.target.value)}
-            />
+            <Label className='text-xs'>{t('settings.dataPath')}</Label>
+            <Input type='text' value={dataPath} onChange={(e) => onPathChange(e.target.value)} />
             <p className='text-xs leading-relaxed text-muted-foreground'>
-              {t('settings.httpConnectTimeoutDescription')}
+              {t('settings.dataPathDescription')}
             </p>
           </div>
 
+          <div className='grid gap-4 md:grid-cols-2'>
+            <div className='space-y-1.5'>
+              <Label className='text-xs'>{t('settings.httpConnectTimeout')}</Label>
+              <Input
+                  type='number'
+                  min='1'
+                  step='1'
+                  inputMode='numeric'
+                  value={httpConnectTimeout}
+                  onChange={(e) => onHttpConnectTimeoutChange(e.target.value)}
+              />
+              <p className='text-xs leading-relaxed text-muted-foreground'>
+                {t('settings.httpConnectTimeoutDescription')}
+              </p>
+            </div>
+
+            <div className='space-y-1.5'>
+              <Label className='text-xs'>{t('settings.httpReadTimeout')}</Label>
+              <Input
+                  type='number'
+                  min='1'
+                  step='1'
+                  inputMode='numeric'
+                  value={httpReadTimeout}
+                  onChange={(e) => onHttpReadTimeoutChange(e.target.value)}
+              />
+              <p className='text-xs leading-relaxed text-muted-foreground'>
+                {t('settings.httpReadTimeoutDescription')}
+              </p>
+            </div>
+          </div>
+
           <div className='space-y-1.5'>
-            <Label className='text-xs'>{t('settings.httpReadTimeout')}</Label>
+            <Label className='text-xs'>{t('settings.httpMaxRetries')}</Label>
             <Input
-              type='number'
-              min='1'
-              step='1'
-              inputMode='numeric'
-              value={httpReadTimeout}
-              onChange={(e) => onHttpReadTimeoutChange(e.target.value)}
+                type='number'
+                min='0'
+                step='1'
+                inputMode='numeric'
+                value={httpMaxRetries}
+                onChange={(e) => onHttpMaxRetriesChange(e.target.value)}
             />
             <p className='text-xs leading-relaxed text-muted-foreground'>
-              {t('settings.httpReadTimeoutDescription')}
+              {t('settings.httpMaxRetriesDescription')}
             </p>
           </div>
-        </div>
 
-        <div className='space-y-1.5'>
-          <Label className='text-xs'>{t('settings.httpMaxRetries')}</Label>
-          <Input
-            type='number'
-            min='0'
-            step='1'
-            inputMode='numeric'
-            value={httpMaxRetries}
-            onChange={(e) => onHttpMaxRetriesChange(e.target.value)}
-          />
-          <p className='text-xs leading-relaxed text-muted-foreground'>
-            {t('settings.httpMaxRetriesDescription')}
-          </p>
-        </div>
-
-        {error && <p className='text-xs text-destructive'>{error}</p>}
-        <div className='flex justify-end pt-1'>
-          <Button
-            onClick={() => setConfirmOpen(true)}
-            disabled={!dataPath.trim() || saving || unchanged}
-          >
-            {saving ? t('settings.restartApplying') : t('settings.restartApply')}
-          </Button>
-        </div>
-      </Section>
-
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogTitle>{t('settings.restartApply')}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {t('settings.restartRequiredDescription')}
-          </AlertDialogDescription>
-          <div className='flex justify-end gap-2'>
-            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setConfirmOpen(false)
-                onApply()
-              }}
+          {error && <p className='text-xs text-destructive'>{error}</p>}
+          <div className='flex justify-end pt-1'>
+            <Button
+                onClick={() => setConfirmOpen(true)}
+                disabled={!dataPath.trim() || saving || unchanged}
             >
-              {t('settings.restartApply')}
-            </AlertDialogAction>
+              {saving ? t('settings.restartApplying') : t('settings.restartApply')}
+            </Button>
           </div>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
+        </Section>
+
+        <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogTitle>{t('settings.restartApply')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('settings.restartRequiredDescription')}
+            </AlertDialogDescription>
+            <div className='flex justify-end gap-2'>
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <AlertDialogAction
+                  onClick={() => {
+                    setConfirmOpen(false)
+                    onApply()
+                  }}
+              >
+                {t('settings.restartApply')}
+              </AlertDialogAction>
+            </div>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
   )
 }
 
 // ── About ─────────────────────────────────────────────────────────
 
 function AboutPane({
-  version,
-  latestVersion,
-  status,
-  isInstallingUpdate,
-  onInstallUpdate,
-}: {
+                     version,
+                     latestVersion,
+                     status,
+                     isInstallingUpdate,
+                     onInstallUpdate,
+                   }: {
   version?: string
   latestVersion?: string
   status: UpdaterStatus
@@ -1281,98 +1395,98 @@ function AboutPane({
   const { t } = useTranslation()
 
   return (
-    <div className='flex h-full flex-col items-center justify-center gap-5 py-8'>
-      <img src='/icon-large.png' alt='Koharu' className='size-20' draggable={false} />
-      <div className='text-center'>
-        <h2 className='text-lg font-bold tracking-wide text-foreground'>Koharu</h2>
-        <p className='mt-1 text-sm text-muted-foreground'>{t('settings.aboutTagline')}</p>
-      </div>
+      <div className='flex h-full flex-col items-center justify-center gap-5 py-8'>
+        <img src='/icon-large.png' alt='Koharu' className='size-20' draggable={false} />
+        <div className='text-center'>
+          <h2 className='text-lg font-bold tracking-wide text-foreground'>Koharu</h2>
+          <p className='mt-1 text-sm text-muted-foreground'>{t('settings.aboutTagline')}</p>
+        </div>
 
-      <div className='w-full max-w-sm rounded-xl border border-border bg-card p-4'>
-        <div className='space-y-3 text-sm'>
-          <InfoRow label={t('settings.aboutVersion')}>
-            <div className='flex flex-col items-end gap-0.5'>
-              <span className='font-mono text-xs font-medium'>{version || '...'}</span>
-              {status === 'loading' && (
-                <LoaderIcon className='size-3.5 animate-spin text-muted-foreground' />
-              )}
-              {status === 'latest' && (
-                <span className='flex items-center gap-1 text-xs text-green-500'>
+        <div className='w-full max-w-sm rounded-xl border border-border bg-card p-4'>
+          <div className='space-y-3 text-sm'>
+            <InfoRow label={t('settings.aboutVersion')}>
+              <div className='flex flex-col items-end gap-0.5'>
+                <span className='font-mono text-xs font-medium'>{version || '...'}</span>
+                {status === 'loading' && (
+                    <LoaderIcon className='size-3.5 animate-spin text-muted-foreground' />
+                )}
+                {status === 'latest' && (
+                    <span className='flex items-center gap-1 text-xs text-green-500'>
                   <CheckCircleIcon className='size-3.5' />
-                  {t('settings.aboutLatest')}
+                      {t('settings.aboutLatest')}
                 </span>
-              )}
-              {status === 'outdated' && (
-                <Button
+                )}
+                {status === 'outdated' && (
+                    <Button
+                        variant='link'
+                        size='xs'
+                        onClick={onInstallUpdate}
+                        disabled={isInstallingUpdate}
+                        className='h-auto gap-1 p-0 text-amber-500'
+                    >
+                      {isInstallingUpdate ? (
+                          <LoaderIcon className='size-3.5 animate-spin' />
+                      ) : (
+                          <AlertCircleIcon className='size-3.5' />
+                      )}
+                      {t('settings.aboutUpdate', { version: latestVersion })}
+                    </Button>
+                )}
+              </div>
+            </InfoRow>
+            <InfoRow label={t('settings.aboutAuthor')}>
+              <Button
                   variant='link'
                   size='xs'
-                  onClick={onInstallUpdate}
-                  disabled={isInstallingUpdate}
-                  className='h-auto gap-1 p-0 text-amber-500'
-                >
-                  {isInstallingUpdate ? (
-                    <LoaderIcon className='size-3.5 animate-spin' />
-                  ) : (
-                    <AlertCircleIcon className='size-3.5' />
-                  )}
-                  {t('settings.aboutUpdate', { version: latestVersion })}
-                </Button>
-              )}
-            </div>
-          </InfoRow>
-          <InfoRow label={t('settings.aboutAuthor')}>
-            <Button
-              variant='link'
-              size='xs'
-              onClick={() => void openExternalUrl('https://github.com/mayocream')}
-            >
-              Mayo
-            </Button>
-          </InfoRow>
-          <InfoRow label={t('settings.aboutRepository')}>
-            <Button
-              variant='link'
-              size='xs'
-              onClick={() => void openExternalUrl(`https://github.com/${GITHUB_REPO}`)}
-            >
-              GitHub
-            </Button>
-          </InfoRow>
+                  onClick={() => void openExternalUrl('https://github.com/mayocream')}
+              >
+                Mayo
+              </Button>
+            </InfoRow>
+            <InfoRow label={t('settings.aboutRepository')}>
+              <Button
+                  variant='link'
+                  size='xs'
+                  onClick={() => void openExternalUrl(`https://github.com/${GITHUB_REPO}`)}
+              >
+                GitHub
+              </Button>
+            </InfoRow>
+          </div>
         </div>
       </div>
-    </div>
   )
 }
 
 // ── Shared ────────────────────────────────────────────────────────
 
 function Section({
-  title,
-  description,
-  children,
-}: {
+                   title,
+                   description,
+                   children,
+                 }: {
   title: string
   description?: string
   children: ReactNode
 }) {
   return (
-    <div className='space-y-3'>
-      <div>
-        <h3 className='text-sm font-semibold text-foreground'>{title}</h3>
-        {description && (
-          <p className='mt-0.5 text-xs leading-relaxed text-muted-foreground'>{description}</p>
-        )}
+      <div className='space-y-3'>
+        <div>
+          <h3 className='text-sm font-semibold text-foreground'>{title}</h3>
+          {description && (
+              <p className='mt-0.5 text-xs leading-relaxed text-muted-foreground'>{description}</p>
+          )}
+        </div>
+        {children}
       </div>
-      {children}
-    </div>
   )
 }
 
 function InfoRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className='flex items-center justify-between'>
-      <span className='text-muted-foreground'>{label}</span>
-      <div className='flex items-center'>{children}</div>
-    </div>
+      <div className='flex items-center justify-between'>
+        <span className='text-muted-foreground'>{label}</span>
+        <div className='flex items-center'>{children}</div>
+      </div>
   )
 }

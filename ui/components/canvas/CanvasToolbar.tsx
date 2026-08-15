@@ -3,6 +3,7 @@
 import {
   LanguagesIcon,
   LoaderCircleIcon,
+  PaintBucketIcon,
   ScanIcon,
   ScanTextIcon,
   TypeIcon,
@@ -13,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { ColorPicker } from '@/components/ui/color-picker'
 import { LlmModelSelect, type LlmModelOption } from '@/components/ui/llm-model-select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -46,12 +48,21 @@ function llmTargetKey(t: LlmTarget): string {
   return `${t.kind}:${t.providerId ?? ''}:${t.modelId}`
 }
 
+/** `"#RRGGBB"` → `[r, g, b, 255]`, the shape `PipelineRunOptions.fill_color` expects. */
+function hexToRgba(hex: string): [number, number, number, number] {
+  const normalized = hex.replace('#', '')
+  const r = parseInt(normalized.slice(0, 2), 16) || 0
+  const g = parseInt(normalized.slice(2, 4), 16) || 0
+  const b = parseInt(normalized.slice(4, 6), 16) || 0
+  return [r, g, b, 255]
+}
+
 function sameLlmTarget(a?: LlmTarget | null, b?: LlmTarget | null): boolean {
   if (!a || !b) return false
   return (
-    a.kind === b.kind &&
-    a.modelId === b.modelId &&
-    (a.providerId ?? null) === (b.providerId ?? null)
+      a.kind === b.kind &&
+      a.modelId === b.modelId &&
+      (a.providerId ?? null) === (b.providerId ?? null)
   )
 }
 
@@ -60,8 +71,8 @@ type SelectableLlmModel = { model: LlmCatalogModel; provider?: LlmProviderCatalo
 const flattenCatalogModels = (catalog?: LlmCatalog): SelectableLlmModel[] => [
   ...(catalog?.localModels ?? []).map((model) => ({ model })),
   ...(catalog?.providers ?? [])
-    .filter((p) => p.status === 'ready')
-    .flatMap((p) => p.models.map((model) => ({ model, provider: p }))),
+      .filter((p) => p.status === 'ready')
+      .flatMap((p) => p.models.map((model) => ({ model, provider: p }))),
 ]
 
 // ---------------------------------------------------------------------------
@@ -70,11 +81,11 @@ const flattenCatalogModels = (catalog?: LlmCatalog): SelectableLlmModel[] => [
 
 export function CanvasToolbar() {
   return (
-    <div className='flex items-center gap-2 border-b border-border/60 bg-card px-3 py-2 text-xs text-foreground'>
-      <WorkflowButtons />
-      <div className='flex-1' />
-      <LlmStatusPopover />
-    </div>
+      <div className='flex items-center gap-2 border-b border-border/60 bg-card px-3 py-2 text-xs text-foreground'>
+        <WorkflowButtons />
+        <div className='flex-1' />
+        <LlmStatusPopover />
+      </div>
   )
 }
 
@@ -114,7 +125,7 @@ function WorkflowButtons() {
    * so re-running is idempotent.
    */
   const runStep = async (
-    pick: (p: NonNullable<Awaited<ReturnType<typeof getConfig>>['pipeline']>) => string[],
+      pick: (p: NonNullable<Awaited<ReturnType<typeof getConfig>>['pipeline']>) => string[],
   ) => {
     if (!pageId) return
     const cfg = await getConfig()
@@ -134,7 +145,7 @@ function WorkflowButtons() {
   }
 
   type PipelinePick = (
-    p: NonNullable<Awaited<ReturnType<typeof getConfig>>['pipeline']>,
+      p: NonNullable<Awaited<ReturnType<typeof getConfig>>['pipeline']>,
   ) => string[]
   const detectChain: PipelinePick = (p) => [
     p.detector!,
@@ -147,6 +158,38 @@ function WorkflowButtons() {
   const inpaintChain: PipelinePick = (p) => [p.inpainter!]
   const renderChain: PipelinePick = (p) => [p.renderer!]
 
+  /**
+   * "Preencher" — a lighter alternative to the AI inpainter (`inpaintChain`
+   * above): flat-fills the same segmentation-mask region instead of
+   * texture-synthesizing it. `mask-fill-detect`/`mask-fill-solid` are fixed
+   * engine ids (not swappable model choices like `p.inpainter`), so this
+   * bypasses `runStep`'s config lookup and calls `startPipeline` directly.
+   */
+  const [isFilling, setIsFilling] = useState(false)
+  const runFill = async (stepId: 'mask-fill-detect' | 'mask-fill-solid', fillColor?: string) => {
+    if (!pageId) return
+    setIsFilling(true)
+    try {
+      const editor = useEditorUiStore.getState()
+      const prefs = usePreferencesStore.getState()
+      await startPipeline({
+        steps: [stepId],
+        pages: [pageId],
+        targetLanguage: editor.selectedLanguage,
+        systemPrompt: prefs.customSystemPrompt,
+        defaultFont: prefs.defaultFont,
+        readingOrder: editor.readingOrder === 'custom' ? undefined : editor.readingOrder,
+        // `fillColor` isn't part of the generated request type yet — the
+        // koharu-rpc route needs a small update to accept it and forward it
+        // into `PipelineRunOptions.fill_color`. Sending it is harmless
+        // either way (unknown JSON fields are ignored server-side today).
+        ...(fillColor ? ({ fillColor: hexToRgba(fillColor) } as Record<string, unknown>) : {}),
+      })
+    } finally {
+      setIsFilling(false)
+    }
+  }
+
   const isDetecting = currentStep === 'detect'
   const isOcr = currentStep === 'ocr'
   const isInpainting = currentStep === 'inpaint'
@@ -154,82 +197,171 @@ function WorkflowButtons() {
   const isRendering = currentStep === 'render'
 
   return (
-    <div className='flex items-center gap-0.5'>
-      <Button
-        variant='ghost'
-        size='xs'
-        onClick={() => void runStep(detectChain)}
-        data-testid='toolbar-detect'
-        disabled={!hasPage || isProcessing}
-      >
-        {isDetecting ? (
-          <LoaderCircleIcon className='size-4 animate-spin' />
-        ) : (
-          <ScanIcon className='size-4' />
-        )}
-        {t('processing.detect')}
-      </Button>
-      <Separator orientation='vertical' className='mx-0.5 h-4' />
-      <Button
-        variant='ghost'
-        size='xs'
-        onClick={() => void runStep(ocrChain)}
-        data-testid='toolbar-ocr'
-        disabled={!hasPage || isProcessing}
-      >
-        {isOcr ? (
-          <LoaderCircleIcon className='size-4 animate-spin' />
-        ) : (
-          <ScanTextIcon className='size-4' />
-        )}
-        {t('processing.ocr')}
-      </Button>
-      <Separator orientation='vertical' className='mx-0.5 h-4' />
-      <Button
-        variant='ghost'
-        size='xs'
-        onClick={() => void runStep(translateChain)}
-        disabled={!hasPage || !llmReady || isProcessing}
-        data-testid='toolbar-translate'
-      >
-        {isTranslating ? (
-          <LoaderCircleIcon className='size-4 animate-spin' />
-        ) : (
-          <LanguagesIcon className='size-4' />
-        )}
-        {t('llm.generate')}
-      </Button>
-      <Separator orientation='vertical' className='mx-0.5 h-4' />
-      <Button
-        variant='ghost'
-        size='xs'
-        onClick={() => void runStep(inpaintChain)}
-        data-testid='toolbar-inpaint'
-        disabled={!hasPage || isProcessing}
-      >
-        {isInpainting ? (
-          <LoaderCircleIcon className='size-4 animate-spin' />
-        ) : (
-          <Wand2Icon className='size-4' />
-        )}
-        {t('mask.inpaint')}
-      </Button>
-      <Separator orientation='vertical' className='mx-0.5 h-4' />
-      <Button
-        variant='ghost'
-        size='xs'
-        onClick={() => void runStep(renderChain)}
-        data-testid='toolbar-render'
-        disabled={!hasPage || isProcessing}
-      >
-        {isRendering ? (
-          <LoaderCircleIcon className='size-4 animate-spin' />
-        ) : (
-          <TypeIcon className='size-4' />
-        )}
-        {t('llm.render')}
-      </Button>
-    </div>
+      <div className='flex items-center gap-0.5'>
+        <Button
+            variant='ghost'
+            size='xs'
+            onClick={() => void runStep(detectChain)}
+            data-testid='toolbar-detect'
+            disabled={!hasPage || isProcessing}
+        >
+          {isDetecting ? (
+              <LoaderCircleIcon className='size-4 animate-spin' />
+          ) : (
+              <ScanIcon className='size-4' />
+          )}
+          {t('processing.detect')}
+        </Button>
+        <Separator orientation='vertical' className='mx-0.5 h-4' />
+        <Button
+            variant='ghost'
+            size='xs'
+            onClick={() => void runStep(ocrChain)}
+            data-testid='toolbar-ocr'
+            disabled={!hasPage || isProcessing}
+        >
+          {isOcr ? (
+              <LoaderCircleIcon className='size-4 animate-spin' />
+          ) : (
+              <ScanTextIcon className='size-4' />
+          )}
+          {t('processing.ocr')}
+        </Button>
+        <Separator orientation='vertical' className='mx-0.5 h-4' />
+        <Button
+            variant='ghost'
+            size='xs'
+            onClick={() => void runStep(translateChain)}
+            disabled={!hasPage || !llmReady || isProcessing}
+            data-testid='toolbar-translate'
+        >
+          {isTranslating ? (
+              <LoaderCircleIcon className='size-4 animate-spin' />
+          ) : (
+              <LanguagesIcon className='size-4' />
+          )}
+          {t('llm.generate')}
+        </Button>
+        <Separator orientation='vertical' className='mx-0.5 h-4' />
+        <Button
+            variant='ghost'
+            size='xs'
+            onClick={() => void runStep(inpaintChain)}
+            data-testid='toolbar-inpaint'
+            disabled={!hasPage || isProcessing}
+        >
+          {isInpainting ? (
+              <LoaderCircleIcon className='size-4 animate-spin' />
+          ) : (
+              <Wand2Icon className='size-4' />
+          )}
+          {t('mask.inpaint')}
+        </Button>
+        <Separator orientation='vertical' className='mx-0.5 h-4' />
+        <FillPopover
+            disabled={!hasPage || isProcessing}
+            busy={isFilling}
+            onDetect={() => void runFill('mask-fill-detect')}
+            onSolid={(hex) => void runFill('mask-fill-solid', hex)}
+        />
+        <Separator orientation='vertical' className='mx-0.5 h-4' />
+        <Button
+            variant='ghost'
+            size='xs'
+            onClick={() => void runStep(renderChain)}
+            data-testid='toolbar-render'
+            disabled={!hasPage || isProcessing}
+        >
+          {isRendering ? (
+              <LoaderCircleIcon className='size-4 animate-spin' />
+          ) : (
+              <TypeIcon className='size-4' />
+          )}
+          {t('llm.render')}
+        </Button>
+      </div>
+  )
+}
+
+function FillPopover({
+                       disabled,
+                       busy,
+                       onDetect,
+                       onSolid,
+                     }: {
+  disabled: boolean
+  busy: boolean
+  onDetect: () => void
+  onSolid: (hex: string) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [solidColor, setSolidColor] = useState('#FFFFFF')
+
+  return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+              variant='ghost'
+              size='xs'
+              data-testid='toolbar-fill'
+              disabled={disabled}
+          >
+            {busy ? (
+                <LoaderCircleIcon className='size-4 animate-spin' />
+            ) : (
+                <PaintBucketIcon className='size-4' />
+            )}
+            {t('mask.fill')}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align='start' className='w-56 p-2' data-testid='fill-popover'>
+          <div className='flex flex-col gap-1'>
+            <Button
+                variant='ghost'
+                size='sm'
+                className='justify-start gap-2 text-xs'
+                data-testid='fill-detect'
+                onClick={() => {
+                  onDetect()
+                  setOpen(false)
+                }}
+            >
+              <ScanIcon className='size-3.5' />
+              <div className='flex flex-col items-start'>
+                <span>{t('mask.fillDetect')}</span>
+                <span className='text-[10px] font-normal text-muted-foreground'>
+                {t('mask.fillDetectHint')}
+              </span>
+              </div>
+            </Button>
+
+            <div className='my-1 border-t border-border' />
+
+            <div className='flex items-center justify-between gap-2 px-2 py-1'>
+              <span className='text-xs'>{t('mask.fillSolid')}</span>
+              <ColorPicker
+                  value={solidColor}
+                  onChange={setSolidColor}
+                  triggerTestId='fill-solid-color-trigger'
+                  pickerTestId='fill-solid-color-picker'
+              />
+            </div>
+            <Button
+                variant='default'
+                size='sm'
+                className='text-xs'
+                data-testid='fill-solid-apply'
+                onClick={() => {
+                  onSolid(solidColor)
+                  setOpen(false)
+                }}
+            >
+              {t('mask.fillSolidApply')}
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
   )
 }
 
@@ -248,8 +380,8 @@ function LlmStatusPopover() {
   const llmSelectedLanguage = useEditorUiStore((s) => s.selectedLanguage)
 
   const selectedModel = useMemo(
-    () => llmModels.find(({ model }) => sameLlmTarget(model.target, selectedTarget)),
-    [llmModels, selectedTarget],
+      () => llmModels.find(({ model }) => sameLlmTarget(model.target, selectedTarget)),
+      [llmModels, selectedTarget],
   )
   const selectedTargetKey = selectedTarget ? llmTargetKey(selectedTarget) : undefined
   const selectedModelLanguages = selectedModel?.model.languages ?? []
@@ -260,9 +392,9 @@ function LlmStatusPopover() {
     if (!next) return
     const nextLanguages = next.model.languages
     const nextLanguage =
-      llmSelectedLanguage && nextLanguages.includes(llmSelectedLanguage)
-        ? llmSelectedLanguage
-        : nextLanguages[0]
+        llmSelectedLanguage && nextLanguages.includes(llmSelectedLanguage)
+            ? llmSelectedLanguage
+            : nextLanguages[0]
     useEditorUiStore.setState({ selectedTarget: next.model.target, selectedLanguage: nextLanguage })
   }
 
@@ -295,13 +427,13 @@ function LlmStatusPopover() {
     if (!nextModel) return
     const nextLanguages = nextModel.languages
     const nextLanguage =
-      llmSelectedLanguage && nextLanguages.includes(llmSelectedLanguage)
-        ? llmSelectedLanguage
-        : nextLanguages[0]
+        llmSelectedLanguage && nextLanguages.includes(llmSelectedLanguage)
+            ? llmSelectedLanguage
+            : nextLanguages[0]
     const cur = useEditorUiStore.getState()
     if (
-      sameLlmTarget(cur.selectedTarget, nextModel.target) &&
-      cur.selectedLanguage === nextLanguage
+        sameLlmTarget(cur.selectedTarget, nextModel.target) &&
+        cur.selectedLanguage === nextLanguage
     ) {
       return
     }
@@ -314,110 +446,110 @@ function LlmStatusPopover() {
   const indicatorBusy = busy || llmLoading
 
   return (
-    <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
-      <PopoverTrigger asChild>
-        <button
-          data-testid='llm-trigger'
-          data-llm-ready={llmReady ? 'true' : 'false'}
-          data-llm-loading={indicatorBusy ? 'true' : 'false'}
-          className={`flex h-6 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium shadow-sm transition hover:opacity-80 ${
-            llmReady
-              ? 'bg-rose-400 text-white ring-1 ring-rose-400/30'
-              : indicatorBusy
-                ? 'bg-amber-400 text-white ring-1 ring-amber-400/30'
-                : 'bg-muted text-muted-foreground ring-1 ring-border/50'
-          }`}
-        >
-          <motion.span
-            className={`size-1.5 rounded-full ${
-              llmReady ? 'bg-white' : indicatorBusy ? 'bg-white' : 'bg-muted-foreground/40'
-            }`}
-            animate={
-              llmReady
-                ? { opacity: [1, 0.5, 1] }
-                : indicatorBusy
-                  ? { opacity: [1, 0.4, 1] }
-                  : { opacity: 1 }
-            }
-            transition={
-              llmReady || indicatorBusy
-                ? { duration: indicatorBusy ? 1 : 2, repeat: Infinity, ease: 'easeInOut' }
-                : {}
-            }
-          />
-          LLM
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align='end' className='w-[280px] p-0' data-testid='llm-popover'>
-        <div className='flex flex-col gap-1.5 px-3 pt-3 pb-2.5'>
+      <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+        <PopoverTrigger asChild>
+          <button
+              data-testid='llm-trigger'
+              data-llm-ready={llmReady ? 'true' : 'false'}
+              data-llm-loading={indicatorBusy ? 'true' : 'false'}
+              className={`flex h-6 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium shadow-sm transition hover:opacity-80 ${
+                  llmReady
+                      ? 'bg-rose-400 text-white ring-1 ring-rose-400/30'
+                      : indicatorBusy
+                          ? 'bg-amber-400 text-white ring-1 ring-amber-400/30'
+                          : 'bg-muted text-muted-foreground ring-1 ring-border/50'
+              }`}
+          >
+            <motion.span
+                className={`size-1.5 rounded-full ${
+                    llmReady ? 'bg-white' : indicatorBusy ? 'bg-white' : 'bg-muted-foreground/40'
+                }`}
+                animate={
+                  llmReady
+                      ? { opacity: [1, 0.5, 1] }
+                      : indicatorBusy
+                          ? { opacity: [1, 0.4, 1] }
+                          : { opacity: 1 }
+                }
+                transition={
+                  llmReady || indicatorBusy
+                      ? { duration: indicatorBusy ? 1 : 2, repeat: Infinity, ease: 'easeInOut' }
+                      : {}
+                }
+            />
+            LLM
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align='end' className='w-[280px] p-0' data-testid='llm-popover'>
+          <div className='flex flex-col gap-1.5 px-3 pt-3 pb-2.5'>
           <span className='text-[10px] font-medium text-muted-foreground uppercase'>
             {t('llm.model')}
           </span>
-          <div className='flex items-center gap-1.5'>
-            <LlmModelSelect
-              data-testid='llm-model-select'
-              value={selectedTargetKey}
-              options={llmModels}
-              getKey={({ model }) => llmTargetKey(model.target)}
-              placeholder={t('llm.selectPlaceholder')}
-              onChange={handleSetSelectedModel}
-              triggerClassName='min-w-0 flex-1'
-            />
-            <Button
-              data-testid='llm-load-toggle'
-              data-llm-ready={selectedIsLoaded ? 'true' : 'false'}
-              data-llm-loading={indicatorBusy ? 'true' : 'false'}
-              variant={selectedIsLoaded ? 'ghost' : 'default'}
-              size='sm'
-              onClick={() => void handleToggleLoadUnload()}
-              disabled={!selectedTarget || indicatorBusy}
-              className='h-6 shrink-0 gap-1 px-2 text-[11px]'
-            >
-              {indicatorBusy ? <LoaderCircleIcon className='size-3 animate-spin' /> : null}
-              {selectedIsLoaded ? t('llm.unload') : t('llm.load')}
-            </Button>
+            <div className='flex items-center gap-1.5'>
+              <LlmModelSelect
+                  data-testid='llm-model-select'
+                  value={selectedTargetKey}
+                  options={llmModels}
+                  getKey={({ model }) => llmTargetKey(model.target)}
+                  placeholder={t('llm.selectPlaceholder')}
+                  onChange={handleSetSelectedModel}
+                  triggerClassName='min-w-0 flex-1'
+              />
+              <Button
+                  data-testid='llm-load-toggle'
+                  data-llm-ready={selectedIsLoaded ? 'true' : 'false'}
+                  data-llm-loading={indicatorBusy ? 'true' : 'false'}
+                  variant={selectedIsLoaded ? 'ghost' : 'default'}
+                  size='sm'
+                  onClick={() => void handleToggleLoadUnload()}
+                  disabled={!selectedTarget || indicatorBusy}
+                  className='h-6 shrink-0 gap-1 px-2 text-[11px]'
+              >
+                {indicatorBusy ? <LoaderCircleIcon className='size-3 animate-spin' /> : null}
+                {selectedIsLoaded ? t('llm.unload') : t('llm.load')}
+              </Button>
+            </div>
           </div>
-        </div>
-        <div className='px-3'>
-          <Separator />
-        </div>
-        <div className='flex flex-col gap-1 px-3 pt-2.5 pb-3'>
+          <div className='px-3'>
+            <Separator />
+          </div>
+          <div className='flex flex-col gap-1 px-3 pt-2.5 pb-3'>
           <span className='text-[10px] font-medium text-muted-foreground uppercase'>
             {t('llm.translationSettings')}
           </span>
-          <div className='flex flex-col gap-1.5'>
-            {selectedModelLanguages.length > 0 ? (
-              <Select
-                value={llmSelectedLanguage ?? selectedModelLanguages[0]}
-                onValueChange={handleSetSelectedLanguage}
-              >
-                <SelectTrigger data-testid='llm-language-select' className='w-full'>
-                  <SelectValue placeholder={t('llm.languagePlaceholder')} />
-                </SelectTrigger>
-                <SelectContent position='popper'>
-                  {selectedModelLanguages.map((language, index) => (
-                    <SelectItem
-                      key={language}
-                      value={language}
-                      data-testid={`llm-language-option-${index}`}
-                    >
-                      {t(`llm.languages.${language}`, { defaultValue: language })}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : null}
-            <Textarea
-              data-testid='llm-system-prompt'
-              value={customSystemPrompt ?? ''}
-              onChange={(e) => setCustomSystemPrompt(e.target.value || undefined)}
-              placeholder={t('llm.systemPromptPlaceholder')}
-              rows={5}
-              className='min-h-0 resize-y px-2 py-1.5 text-xs leading-snug md:text-xs'
-            />
+            <div className='flex flex-col gap-1.5'>
+              {selectedModelLanguages.length > 0 ? (
+                  <Select
+                      value={llmSelectedLanguage ?? selectedModelLanguages[0]}
+                      onValueChange={handleSetSelectedLanguage}
+                  >
+                    <SelectTrigger data-testid='llm-language-select' className='w-full'>
+                      <SelectValue placeholder={t('llm.languagePlaceholder')} />
+                    </SelectTrigger>
+                    <SelectContent position='popper'>
+                      {selectedModelLanguages.map((language, index) => (
+                          <SelectItem
+                              key={language}
+                              value={language}
+                              data-testid={`llm-language-option-${index}`}
+                          >
+                            {t(`llm.languages.${language}`, { defaultValue: language })}
+                          </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+              ) : null}
+              <Textarea
+                  data-testid='llm-system-prompt'
+                  value={customSystemPrompt ?? ''}
+                  onChange={(e) => setCustomSystemPrompt(e.target.value || undefined)}
+                  placeholder={t('llm.systemPromptPlaceholder')}
+                  rows={5}
+                  className='min-h-0 resize-y px-2 py-1.5 text-xs leading-snug md:text-xs'
+              />
+            </div>
           </div>
-        </div>
-      </PopoverContent>
-    </Popover>
+        </PopoverContent>
+      </Popover>
   )
 }

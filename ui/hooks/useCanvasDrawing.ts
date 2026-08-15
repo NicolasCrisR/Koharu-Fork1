@@ -68,8 +68,8 @@ async function blobToUint8(blob: Blob): Promise<Uint8Array> {
 }
 
 const exportCanvasRegion = async (
-  canvas: HTMLCanvasElement,
-  region: Region,
+    canvas: HTMLCanvasElement,
+    region: Region,
 ): Promise<Uint8Array | null> => {
   if (region.width <= 0 || region.height <= 0) return null
   const tmp = document.createElement('canvas')
@@ -78,15 +78,15 @@ const exportCanvasRegion = async (
   const ctx = tmp.getContext('2d')
   if (!ctx) return null
   ctx.drawImage(
-    canvas,
-    region.x,
-    region.y,
-    region.width,
-    region.height,
-    0,
-    0,
-    region.width,
-    region.height,
+      canvas,
+      region.x,
+      region.y,
+      region.width,
+      region.height,
+      0,
+      0,
+      region.width,
+      region.height,
   )
   const blob = await new Promise<Blob | null>((r) => tmp.toBlob(r, 'image/png'))
   return blob ? blobToUint8(blob) : null
@@ -109,21 +109,25 @@ const initBounds = (point: DocumentPointer, radius: number): Bounds => ({
 // ---------------------------------------------------------------------------
 
 export function useCanvasDrawing(
-  dims: CanvasDims | null,
-  pointerToDocument: PointerToDocumentFn,
-  config: CanvasDrawingConfig,
+    dims: CanvasDims | null,
+    pointerToDocument: PointerToDocumentFn,
+    config: CanvasDrawingConfig,
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null)
   const drawingRef = useRef(false)
   const lastPointRef = useRef<DocumentPointer | null>(null)
   const boundsRef = useRef<Bounds | null>(null)
+  // Fixed anchor for the current stroke, used to lock it to a straight
+  // horizontal/vertical line while Shift is held.
+  const strokeStartRef = useRef<DocumentPointer | null>(null)
 
   useEffect(() => {
     if (config.enabled) return
     drawingRef.current = false
     lastPointRef.current = null
     boundsRef.current = null
+    strokeStartRef.current = null
   }, [config.enabled])
 
   useEffect(() => {
@@ -140,6 +144,7 @@ export function useCanvasDrawing(
         drawingRef.current = false
         lastPointRef.current = null
         boundsRef.current = null
+        strokeStartRef.current = null
       }
     }
 
@@ -161,6 +166,7 @@ export function useCanvasDrawing(
       drawingRef.current = false
       lastPointRef.current = null
       boundsRef.current = null
+      strokeStartRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dims?.key, dims?.width, dims?.height, config.enabled])
@@ -232,40 +238,50 @@ export function useCanvasDrawing(
   }
 
   const bind = useDrag(
-    ({ first, last, event, active }) => {
-      if (!config.enabled || !dims) return
-      const sourceEvent = event as MouseEvent
-      const point = pointerToDocument(sourceEvent)
-      if (!point) {
-        if ((last || !active) && drawingRef.current) finalizeStroke()
-        return
-      }
-      const clamped = clampToDims(point, dims)
-      const brushSize = config.getBrushSize()
-      const radius = brushSize / 2
+      ({ first, last, event, active }) => {
+        if (!config.enabled || !dims) return
+        const sourceEvent = event as MouseEvent
+        const point = pointerToDocument(sourceEvent)
+        if (!point) {
+          if ((last || !active) && drawingRef.current) finalizeStroke()
+          return
+        }
+        const clamped = clampToDims(point, dims)
+        const brushSize = config.getBrushSize()
+        const radius = brushSize / 2
 
-      if (first) {
-        drawingRef.current = true
-        lastPointRef.current = clamped
-        boundsRef.current = initBounds(clamped, radius)
-        drawStroke(clamped, clamped)
-        return
-      }
-      if (!drawingRef.current) return
-      const lastPoint = lastPointRef.current ?? clamped
-      drawStroke(lastPoint, clamped)
-      lastPointRef.current = clamped
-      boundsRef.current = boundsRef.current
-        ? expandBounds(boundsRef.current, clamped, radius)
-        : initBounds(clamped, radius)
-      if (last || !active) finalizeStroke()
-    },
-    {
-      pointer: { buttons: 1, touch: true },
-      preventDefault: true,
-      filterTaps: true,
-      eventOptions: { passive: false },
-    },
+        if (first) {
+          drawingRef.current = true
+          strokeStartRef.current = clamped
+          lastPointRef.current = clamped
+          boundsRef.current = initBounds(clamped, radius)
+          drawStroke(clamped, clamped)
+          return
+        }
+        if (!drawingRef.current) return
+        const lastPoint = lastPointRef.current ?? clamped
+        // Shift locks the whole stroke to a straight horizontal or vertical
+        // line from where it started — same idea as Photoshop/Ibis Paint.
+        let target = clamped
+        if (sourceEvent.shiftKey && strokeStartRef.current) {
+          const start = strokeStartRef.current
+          const dx = clamped.x - start.x
+          const dy = clamped.y - start.y
+          target = Math.abs(dx) >= Math.abs(dy) ? { x: clamped.x, y: start.y } : { x: start.x, y: clamped.y }
+        }
+        drawStroke(lastPoint, target)
+        lastPointRef.current = target
+        boundsRef.current = boundsRef.current
+            ? expandBounds(boundsRef.current, target, radius)
+            : initBounds(target, radius)
+        if (last || !active) finalizeStroke()
+      },
+      {
+        pointer: { buttons: 1, touch: true },
+        preventDefault: true,
+        filterTaps: true,
+        eventOptions: { passive: false },
+      },
   )
 
   return { canvasRef, visible: config.enabled, bind }

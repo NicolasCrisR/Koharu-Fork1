@@ -33,7 +33,14 @@ import {
   useTextNodes,
   type TextNodeEntry,
 } from '@/hooks/useCurrentPage'
-import { fetchGoogleFont, useGetGoogleFontsCatalog, useListFonts } from '@/lib/api/default/default'
+import { useScene } from '@/hooks/useScene'
+import {
+  fetchGoogleFont,
+  getConfig,
+  startPipeline,
+  useGetGoogleFontsCatalog,
+  useListFonts,
+} from '@/lib/api/default/default'
 import type {
   FontFaceInfo,
   FontPrediction,
@@ -51,7 +58,9 @@ import {
   uniqueFontFaces,
 } from '@/lib/font-utils'
 import { applyOp, invalidateScene, queueAutoRender } from '@/lib/io/scene'
+import { buildStyleBatchOp, buildTranslationBatchOp, collectAllTextNodes } from '@/lib/io/textOps'
 import { ops } from '@/lib/ops'
+import { TEXT_CASE_TRANSFORMS } from '@/lib/text-case'
 import { useEditorUiStore } from '@/lib/stores/editorUiStore'
 import { usePreferencesStore } from '@/lib/stores/preferencesStore'
 import { cn } from '@/lib/utils'
@@ -74,13 +83,13 @@ const DEFAULT_FONT_FACES: FontFaceInfo[] = [
 
 const clampByte = (v: number) => Math.max(0, Math.min(255, Math.round(v)))
 const clampStrokeWidth = (v: number) =>
-  Number(Math.max(MIN_STROKE_WIDTH, Math.min(MAX_STROKE_WIDTH, v)).toFixed(1))
+    Number(Math.max(MIN_STROKE_WIDTH, Math.min(MAX_STROKE_WIDTH, v)).toFixed(1))
 
 const colorToHex = (color: number[]) =>
-  `#${color
-    .slice(0, 3)
-    .map((v) => clampByte(v).toString(16).padStart(2, '0'))
-    .join('')}`
+    `#${color
+        .slice(0, 3)
+        .map((v) => clampByte(v).toString(16).padStart(2, '0'))
+        .join('')}`
 
 const hexToColor = (value: string, alpha: number): number[] => {
   const normalized = value.replace('#', '')
@@ -122,7 +131,7 @@ const predictionColor = (prediction?: FontPrediction | null): number[] | undefin
 
 // Mirrors renderer precedence: explicit style color → predicted color → black.
 const effectiveColorOf = (style?: TextStyle | null, prediction?: FontPrediction | null): number[] =>
-  style?.color ?? predictionColor(prediction) ?? DEFAULT_COLOR
+    style?.color ?? predictionColor(prediction) ?? DEFAULT_COLOR
 
 const hasExplicitColor = (node: TextNodeEntry) => Array.isArray(node.data.style?.color)
 
@@ -132,6 +141,7 @@ export function RenderControlsPanel() {
   const textNodes = useTextNodes()
   const selectedNode = useSelectedTextNode()
   const selectedNodes = useSelectedTextNodes()
+  const { scene } = useScene()
   const { data: availableFonts = [] } = useListFonts()
   useGetGoogleFontsCatalog() // prefetch catalog so picker can decorate Google entries
   const appDefaultFont = usePreferencesStore((s) => s.defaultFont)
@@ -161,27 +171,27 @@ export function RenderControlsPanel() {
   const hasNodes = textNodes.length > 0
 
   const fontCandidates = useMemo(
-    () =>
-      uniqueFontFaces(
-        [
-          ...sortedFonts,
-          ...(appDefaultFont ? [fallbackFontFace(appDefaultFont)] : []),
-          ...(selectedNode?.data.style?.fontFamilies?.slice(0, 1)?.map(fallbackFontFace) ?? []),
-          ...(firstNode?.data.style?.fontFamilies?.slice(0, 1)?.map(fallbackFontFace) ?? []),
-          ...DEFAULT_FONT_FACES,
-        ].filter((v): v is FontFaceInfo => !!v),
-      ),
-    [sortedFonts, appDefaultFont, selectedNode?.id, selectedNode?.data.style?.fontFamilies],
+      () =>
+          uniqueFontFaces(
+              [
+                ...sortedFonts,
+                ...(appDefaultFont ? [fallbackFontFace(appDefaultFont)] : []),
+                ...(selectedNode?.data.style?.fontFamilies?.slice(0, 1)?.map(fallbackFontFace) ?? []),
+                ...(firstNode?.data.style?.fontFamilies?.slice(0, 1)?.map(fallbackFontFace) ?? []),
+                ...DEFAULT_FONT_FACES,
+              ].filter((v): v is FontFaceInfo => !!v),
+          ),
+      [sortedFonts, appDefaultFont, selectedNode?.id, selectedNode?.data.style?.fontFamilies],
   )
 
   const currentFontCandidate =
-    selectedNode?.data.style?.fontFamilies?.[0] ??
-    appDefaultFont ??
-    firstNode?.data.style?.fontFamilies?.[0] ??
-    (hasNodes ? fontCandidates[0]?.postScriptName : '')
+      selectedNode?.data.style?.fontFamilies?.[0] ??
+      appDefaultFont ??
+      firstNode?.data.style?.fontFamilies?.[0] ??
+      (hasNodes ? fontCandidates[0]?.postScriptName : '')
   const currentFontFace = useMemo(() => {
     return (
-      findFontFace(fontCandidates, currentFontCandidate) || fallbackFontFace(currentFontCandidate)
+        findFontFace(fontCandidates, currentFontCandidate) || fallbackFontFace(currentFontCandidate)
     )
   }, [fontCandidates, currentFontCandidate])
 
@@ -214,16 +224,16 @@ export function RenderControlsPanel() {
       if (fPsNorm.includes(nameNoSpace)) {
         // Ensure the family part of the PS name is an EXACT match
         const familyPart = f.postScriptName
-          .split(/[:\-_]/)[0]
-          .replace(/[\s\-_]+/g, '')
-          .toLowerCase()
+            .split(/[:\-_]/)[0]
+            .replace(/[\s\-_]+/g, '')
+            .toLowerCase()
         if (familyPart !== nameNoSpace) return false
 
         const rest = fPsNorm.replace(nameNoSpace, '')
         const isStyleSuffix =
-          !rest ||
-          /^[-_\s]/.test(rest) ||
-          STYLE_KEYWORDS.some((k) => rest.toLowerCase().includes(k.toLowerCase()))
+            !rest ||
+            /^[-_\s]/.test(rest) ||
+            STYLE_KEYWORDS.some((k) => rest.toLowerCase().includes(k.toLowerCase()))
 
         if (isStyleSuffix) return true
       }
@@ -243,11 +253,11 @@ export function RenderControlsPanel() {
     // Second pass: identify duplicates
     return mapped.map((item) => {
       const isDuplicate =
-        mapped.filter(
-          (other) =>
-            other.variant.postScriptName !== item.variant.postScriptName &&
-            other.label === item.label,
-        ).length > 0
+          mapped.filter(
+              (other) =>
+                  other.variant.postScriptName !== item.variant.postScriptName &&
+                  other.label === item.label,
+          ).length > 0
 
       return {
         ...item,
@@ -269,14 +279,14 @@ export function RenderControlsPanel() {
   const currentFontSize: number | undefined = selectedNode?.data.style?.fontSize ?? undefined
 
   const effectiveAlign: TextAlign =
-    selectedNode?.data.style?.textAlign ??
-    firstNode?.data.style?.textAlign ??
-    (selectedNode?.data.translation ? 'center' : 'left')
+      selectedNode?.data.style?.textAlign ??
+      firstNode?.data.style?.textAlign ??
+      (selectedNode?.data.translation ? 'center' : 'left')
 
   const currentFontPreviewState = useGoogleFontPreview(
-    currentFontFace?.source === 'google' ? currentFont : (currentFontFamilyName ?? ''),
-    currentFontFace?.source ?? 'system',
-    true,
+      currentFontFace?.source === 'google' ? currentFont : (currentFontFamilyName ?? ''),
+      currentFontFace?.source ?? 'system',
+      true,
   )
 
   // ---------------------------------------------------------------------------
@@ -292,6 +302,8 @@ export function RenderControlsPanel() {
       effect: updates.effect ?? current?.effect ?? null,
       stroke: updates.stroke ?? current?.stroke ?? null,
       textAlign: updates.textAlign ?? current?.textAlign ?? null,
+      lineSpacing: updates.lineSpacing ?? current?.lineSpacing ?? null,
+      letterSpacing: updates.letterSpacing ?? current?.letterSpacing ?? null,
     }
     return ops.updateNode(page!.id, n.id, {
       data: { text: { style: nextStyle } } as never,
@@ -299,19 +311,19 @@ export function RenderControlsPanel() {
   }
 
   const applyStyleToNodes = (
-    nodes: TextNodeEntry[],
-    updates: Partial<TextStyle>,
-    label: string,
+      nodes: TextNodeEntry[],
+      updates: Partial<TextStyle>,
+      label: string,
   ) => {
     if (!page || nodes.length === 0) return
     void (async () => {
       const op =
-        nodes.length === 1
-          ? buildStyleOp(nodes[0], updates)
-          : ops.batch(
-              label,
-              nodes.map((n) => buildStyleOp(n, updates)),
-            )
+          nodes.length === 1
+              ? buildStyleOp(nodes[0], updates)
+              : ops.batch(
+                  label,
+                  nodes.map((n) => buildStyleOp(n, updates)),
+              )
       await applyOp(op)
       queueAutoRender(page.id)
     })()
@@ -325,6 +337,69 @@ export function RenderControlsPanel() {
 
   const applyStyleToAll = (updates: Partial<TextStyle>) => {
     applyStyleToNodes(textNodes, updates, 'Bulk style update')
+  }
+
+  const [isApplyingCase, setIsApplyingCase] = useState(false)
+  // Same "selected block(s) vs whole document" pattern as font/style edits
+  // above: a block selected → only that block; nothing selected → every
+  // text block on every page (not just the current one).
+  const applyTextCase = async (fn: (s: string) => string) => {
+    if (selectedNodes.length > 0) {
+      if (!page) return
+      const nodeOps = selectedNodes.map((n) =>
+          ops.updateNode(page.id, n.id, {
+            data: { text: { translation: fn(n.data.translation ?? '') } },
+          } as never),
+      )
+      const op = nodeOps.length === 1 ? nodeOps[0] : ops.batch('Text case update', nodeOps)
+      await applyOp(op)
+      queueAutoRender(page.id)
+      return
+    }
+
+    setIsApplyingCase(true)
+    try {
+      const refs = collectAllTextNodes(scene)
+      const { op, affectedPageIds } = buildTranslationBatchOp(refs, fn, 'Global text case update')
+      if (!op) return
+      await applyOp(op)
+      if (affectedPageIds.length > 0) {
+        const cfg = await getConfig()
+        const renderer = cfg.pipeline?.renderer
+        if (renderer) {
+          await startPipeline({ steps: [renderer], pages: affectedPageIds, defaultFont: appDefaultFont })
+        }
+      }
+    } finally {
+      setIsApplyingCase(false)
+    }
+  }
+
+  // Line/letter spacing: same selected-block-vs-whole-document pattern as
+  // text case above (and, per the product spec, the same pattern the font
+  // controls use — a block selected only touches that block).
+  const currentLineSpacing = selectedNode?.data.style?.lineSpacing ?? 1
+  const currentLetterSpacing = selectedNode?.data.style?.letterSpacing ?? 0
+  const [isApplyingSpacing, setIsApplyingSpacing] = useState(false)
+
+  const applySpacing = async (updates: Partial<Pick<TextStyle, 'lineSpacing' | 'letterSpacing'>>) => {
+    if (applyStyleToSelected(updates)) return
+
+    setIsApplyingSpacing(true)
+    try {
+      const { op, affectedPageIds } = buildStyleBatchOp(scene, updates, 'Global spacing update')
+      if (!op) return
+      await applyOp(op)
+      if (affectedPageIds.length > 0) {
+        const cfg = await getConfig()
+        const renderer = cfg.pipeline?.renderer
+        if (renderer) {
+          await startPipeline({ steps: [renderer], pages: affectedPageIds, defaultFont: appDefaultFont })
+        }
+      }
+    } finally {
+      setIsApplyingSpacing(false)
+    }
   }
 
   const commitCurrentFontColorIfImplicit = () => {
@@ -366,408 +441,478 @@ export function RenderControlsPanel() {
   ]
 
   const scopeLabel =
-    selectedNodes.length > 1
-      ? t('render.fontScopeBlocksCount', { count: selectedNodes.length })
-      : selectedNode
-        ? t('render.fontScopeBlockIndex', {
-            index: textNodes.findIndex((n) => n.id === selectedNode.id) + 1,
-          })
-        : t('render.fontScopeGlobal')
+      selectedNodes.length > 1
+          ? t('render.fontScopeBlocksCount', { count: selectedNodes.length })
+          : selectedNode
+              ? t('render.fontScopeBlockIndex', {
+                index: textNodes.findIndex((n) => n.id === selectedNode.id) + 1,
+              })
+              : t('render.fontScopeGlobal')
   const scopeToneClass = selectedNode
-    ? 'border-primary/20 bg-primary/10 text-primary'
-    : 'border-border/60 bg-muted text-muted-foreground'
+      ? 'border-primary/20 bg-primary/10 text-primary'
+      : 'border-border/60 bg-muted text-muted-foreground'
 
   if (!page) {
     return (
-      <div className='flex items-center justify-center py-6 text-xs text-muted-foreground'>
-        {t('textBlocks.emptyPrompt')}
-      </div>
+        <div className='flex items-center justify-center py-6 text-xs text-muted-foreground'>
+          {t('textBlocks.emptyPrompt')}
+        </div>
     )
   }
 
   return (
-    <div className='flex w-full min-w-0 flex-col gap-2'>
-      {/* Scope */}
-      <div className='flex items-center justify-end'>
+      <div className='flex w-full min-w-0 flex-col gap-2'>
+        {/* Scope */}
+        <div className='flex items-center justify-end'>
         <span
-          data-testid='render-scope-indicator'
-          className={cn(
-            'rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase',
-            scopeToneClass,
-          )}
+            data-testid='render-scope-indicator'
+            className={cn(
+                'rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase',
+                scopeToneClass,
+            )}
         >
           {scopeLabel}
         </span>
-      </div>
+        </div>
 
-      {/* Font + Color */}
-      <div className='flex flex-col gap-0.5' ref={sectionRef}>
-        <div className='flex items-baseline justify-between'>
+        {/* Font + Color */}
+        <div className='flex flex-col gap-0.5' ref={sectionRef}>
+          <div className='flex items-baseline justify-between'>
           <span className='text-[10px] font-medium text-muted-foreground uppercase'>
             {t('render.fontLabel')}
           </span>
-          <span className='text-[10px] font-medium text-muted-foreground uppercase'>
+            <span className='text-[10px] font-medium text-muted-foreground uppercase'>
             {t('render.fontColorLabel')}
           </span>
-        </div>
-        <div className='flex min-w-0 items-center gap-1.5'>
-          <div className='min-w-0 flex-[1.5]'>
-            <FontSelect
-              data-testid='render-font-select'
-              value={currentFontFamilyName ?? ''}
-              options={familyOptions}
-              favoriteFonts={favoriteFonts}
-              onToggleFavorite={toggleFavoriteFont}
-              disabled={familyOptions.length === 0}
-              placeholder={t('render.fontPlaceholder')}
-              triggerStyle={
-                currentFontFamilyName ? { fontFamily: currentFontFamilyName } : undefined
-              }
-              contentStyle={
-                sectionWidth > 0 ? { width: sectionWidth, maxWidth: sectionWidth } : undefined
-              }
-              onChange={async (value) => {
-                const familyVariants = fontCandidates.filter(
-                  (f) => normalizeFamilyName(f.familyName) === value,
-                )
-                // Try to find Regular/400 first
-                const regularFace =
-                  familyVariants.find((f) => {
-                    const ps = f.postScriptName.toLowerCase()
-                    return ps.includes('regular') || ps.includes('400') || ps.includes(':400')
-                  }) || familyVariants[0]
-
-                const face = regularFace || findFontFace(fontCandidates, value)
-                if (!face) return
-
-                // Trigger fetch for Google Fonts if not cached
-                if (face.source === 'google' && !face.cached) {
-                  try {
-                    await fetchGoogleFont(encodeURIComponent(face.postScriptName))
-                    invalidateScene()
-                  } catch (e) {
-                    console.error('Failed to fetch font:', e)
-                  }
-                }
-
-                if (selectedNode) {
-                  applyStyleToSelected({ fontFamilies: [face.postScriptName] })
-                  return
-                }
-                usePreferencesStore.getState().setDefaultFont(face.postScriptName)
-              }}
-            />
           </div>
-          {currentVariants && currentVariants.length > 1 && (
-            <div className='min-w-0 flex-1'>
-              <Select
-                key={`${currentFontFamilyName}-${currentVariants.length}`}
-                value={currentFont}
-                onValueChange={async (value) => {
-                  // Trigger fetch for Google Fonts if not cached
-                  const variant = currentVariants.find((v) => v.postScriptName === value)
-                  if (variant?.source === 'google' && !variant.cached) {
-                    try {
-                      await fetchGoogleFont(encodeURIComponent(value))
-                      invalidateScene()
-                    } catch (e) {
-                      console.error('Failed to fetch font variant:', e)
-                    }
+          <div className='flex min-w-0 items-center gap-1.5'>
+            <div className='min-w-0 flex-[1.5]'>
+              <FontSelect
+                  data-testid='render-font-select'
+                  value={currentFontFamilyName ?? ''}
+                  options={familyOptions}
+                  favoriteFonts={favoriteFonts}
+                  onToggleFavorite={toggleFavoriteFont}
+                  disabled={familyOptions.length === 0}
+                  placeholder={t('render.fontPlaceholder')}
+                  triggerStyle={
+                    currentFontFamilyName ? { fontFamily: currentFontFamilyName } : undefined
                   }
-
-                  if (selectedNode) {
-                    applyStyleToSelected({ fontFamilies: [value] })
-                    return
-                  }
-                  usePreferencesStore.getState().setDefaultFont(value)
-                }}
-              >
-                <SelectTrigger
-                  className='h-7 w-full px-2 text-xs'
-                  style={{
-                    fontFamily:
-                      currentFontPreviewState === 'ready'
-                        ? `"${(currentFontFace?.source === 'google' ? currentFont : (currentFontFamilyName ?? '')).replace(':', '-')}"`
-                        : undefined,
-                  }}
-                >
-                  <SelectValue placeholder={t('render.fontStylePlaceholder')} />
-                </SelectTrigger>
-                <SelectContent
-                  position='popper'
-                  style={
+                  contentStyle={
                     sectionWidth > 0 ? { width: sectionWidth, maxWidth: sectionWidth } : undefined
                   }
-                  className='overflow-hidden p-0'
-                  align='start'
-                  sideOffset={4}
-                >
-                  {currentVariantsWithLabels.map(({ variant, label, isDuplicate }) => (
-                    <VariantItem
-                      key={variant.postScriptName}
-                      variant={variant}
-                      label={
-                        isDuplicate
-                          ? `${label} (${variant.source === 'google' ? 'Google' : 'System'})`
-                          : label
-                      }
-                    />
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          <ColorPicker
-            value={currentColorHex}
-            disabled={!hasNodes}
-            triggerTestId='render-color-trigger'
-            pickerTestId='render-color-picker'
-            swatchTestId='render-color-swatch'
-            inputTestId='render-color-input'
-            pickButtonTestId='render-color-pick'
-            onOpenChange={(open) => {
-              if (open) commitCurrentFontColorIfImplicit()
-            }}
-            onChange={(hex) => {
-              const nextColor = hexToColor(hex, currentColor[3] ?? 255)
-              if (applyStyleToSelected({ color: nextColor })) return
-              applyStyleToAll({ color: nextColor })
-            }}
-            className='size-7'
-          />
-        </div>
-      </div>
+                  onChange={async (value) => {
+                    const familyVariants = fontCandidates.filter(
+                        (f) => normalizeFamilyName(f.familyName) === value,
+                    )
+                    // Try to find Regular/400 first
+                    const regularFace =
+                        familyVariants.find((f) => {
+                          const ps = f.postScriptName.toLowerCase()
+                          return ps.includes('regular') || ps.includes('400') || ps.includes(':400')
+                        }) || familyVariants[0]
 
-      {/* Size / Effect / Align */}
-      <div className='grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-x-1.5'>
+                    const face = regularFace || findFontFace(fontCandidates, value)
+                    if (!face) return
+
+                    // Trigger fetch for Google Fonts if not cached
+                    if (face.source === 'google' && !face.cached) {
+                      try {
+                        await fetchGoogleFont(encodeURIComponent(face.postScriptName))
+                        invalidateScene()
+                      } catch (e) {
+                        console.error('Failed to fetch font:', e)
+                      }
+                    }
+
+                    if (selectedNode) {
+                      applyStyleToSelected({ fontFamilies: [face.postScriptName] })
+                      return
+                    }
+                    usePreferencesStore.getState().setDefaultFont(face.postScriptName)
+                  }}
+              />
+            </div>
+            {currentVariants && currentVariants.length > 1 && (
+                <div className='min-w-0 flex-1'>
+                  <Select
+                      key={`${currentFontFamilyName}-${currentVariants.length}`}
+                      value={currentFont}
+                      onValueChange={async (value) => {
+                        // Trigger fetch for Google Fonts if not cached
+                        const variant = currentVariants.find((v) => v.postScriptName === value)
+                        if (variant?.source === 'google' && !variant.cached) {
+                          try {
+                            await fetchGoogleFont(encodeURIComponent(value))
+                            invalidateScene()
+                          } catch (e) {
+                            console.error('Failed to fetch font variant:', e)
+                          }
+                        }
+
+                        if (selectedNode) {
+                          applyStyleToSelected({ fontFamilies: [value] })
+                          return
+                        }
+                        usePreferencesStore.getState().setDefaultFont(value)
+                      }}
+                  >
+                    <SelectTrigger
+                        className='h-7 w-full px-2 text-xs'
+                        style={{
+                          fontFamily:
+                              currentFontPreviewState === 'ready'
+                                  ? `"${(currentFontFace?.source === 'google' ? currentFont : (currentFontFamilyName ?? '')).replace(':', '-')}"`
+                                  : undefined,
+                        }}
+                    >
+                      <SelectValue placeholder={t('render.fontStylePlaceholder')} />
+                    </SelectTrigger>
+                    <SelectContent
+                        position='popper'
+                        style={
+                          sectionWidth > 0 ? { width: sectionWidth, maxWidth: sectionWidth } : undefined
+                        }
+                        className='overflow-hidden p-0'
+                        align='start'
+                        sideOffset={4}
+                    >
+                      {currentVariantsWithLabels.map(({ variant, label, isDuplicate }) => (
+                          <VariantItem
+                              key={variant.postScriptName}
+                              variant={variant}
+                              label={
+                                isDuplicate
+                                    ? `${label} (${variant.source === 'google' ? 'Google' : 'System'})`
+                                    : label
+                              }
+                          />
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+            )}
+            <ColorPicker
+                value={currentColorHex}
+                disabled={!hasNodes}
+                triggerTestId='render-color-trigger'
+                pickerTestId='render-color-picker'
+                swatchTestId='render-color-swatch'
+                inputTestId='render-color-input'
+                pickButtonTestId='render-color-pick'
+                onOpenChange={(open) => {
+                  if (open) commitCurrentFontColorIfImplicit()
+                }}
+                onChange={(hex) => {
+                  const nextColor = hexToColor(hex, currentColor[3] ?? 255)
+                  if (applyStyleToSelected({ color: nextColor })) return
+                  applyStyleToAll({ color: nextColor })
+                }}
+                className='size-7'
+            />
+          </div>
+        </div>
+
+        {/* Size / Effect / Align */}
+        <div className='grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-x-1.5'>
         <span className='text-[10px] font-medium text-muted-foreground uppercase'>
           {t('render.fontSizeLabel')}
         </span>
-        <span className='text-[10px] font-medium text-muted-foreground uppercase'>
+          <span className='text-[10px] font-medium text-muted-foreground uppercase'>
           {t('render.effectLabel')}
         </span>
-        <span className='text-[10px] font-medium text-muted-foreground uppercase'>
+          <span className='text-[10px] font-medium text-muted-foreground uppercase'>
           {t('render.alignLabel')}
         </span>
 
-        <div className='flex min-w-0 items-center rounded-md border border-input bg-background shadow-xs'>
-          <Button
-            type='button'
-            variant='ghost'
-            size='icon-sm'
-            className='size-6 shrink-0 rounded-r-none border-r'
-            disabled={!selectedNode}
-            onClick={() => {
-              const next = Math.max(6, Math.round((currentFontSize ?? 16) - 1))
-              applyStyleToSelected({ fontSize: next })
-            }}
-          >
-            <MinusIcon className='size-3' />
-          </Button>
-          <Input
-            type='number'
-            step='1'
-            min='6'
-            max='300'
-            inputMode='numeric'
-            className='h-6 min-w-0 flex-1 [appearance:textfield] rounded-none border-0 px-0.5 text-center text-xs shadow-none focus-visible:ring-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
-            data-testid='render-font-size'
-            disabled={!selectedNode}
-            value={currentFontSize !== undefined ? Math.round(currentFontSize) : ''}
-            placeholder='auto'
-            onChange={(event) => {
-              const parsed = Number.parseInt(event.target.value, 10)
-              if (!Number.isFinite(parsed) || parsed < 1) return
-              applyStyleToSelected({ fontSize: Math.min(300, parsed) })
-            }}
-          />
-          <Button
-            type='button'
-            variant='ghost'
-            size='icon-sm'
-            className='size-6 shrink-0 rounded-l-none border-l'
-            disabled={!selectedNode}
-            onClick={() => {
-              const next = Math.min(300, Math.round((currentFontSize ?? 16) + 1))
-              applyStyleToSelected({ fontSize: next })
-            }}
-          >
-            <PlusIcon className='size-3' />
-          </Button>
-        </div>
-
-        <div className='flex items-center gap-0.5'>
-          {effectItems.map((item) => {
-            const active = currentEffect[item.key]
-            const Icon = item.Icon
-            return (
-              <Tooltip key={item.key}>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant='outline'
-                    size='icon-sm'
-                    aria-label={item.label}
-                    data-testid={`render-effect-toggle-${item.key}`}
-                    className={cn(
-                      'size-6 shrink-0',
-                      active &&
-                        'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
-                    )}
-                    onClick={() => {
-                      const nextEffect: TextShaderEffect = {
-                        ...currentEffect,
-                        [item.key]: !active,
-                      }
-                      if (applyStyleToSelected({ effect: nextEffect })) return
-                      setRenderEffect({
-                        bold: nextEffect.bold ?? false,
-                        italic: nextEffect.italic ?? false,
-                      })
-                    }}
-                  >
-                    <Icon className='size-3' />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side='bottom' sideOffset={4}>
-                  {item.label}
-                </TooltipContent>
-              </Tooltip>
-            )
-          })}
-        </div>
-
-        <div className='flex items-center gap-0.5'>
-          {textAlignItems.map((item) => {
-            const active = effectiveAlign === item.value
-            const Icon = item.Icon
-            return (
-              <Tooltip key={item.value}>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant='outline'
-                    size='icon-sm'
-                    aria-label={item.label}
-                    data-testid={`render-align-${item.value}`}
-                    disabled={!hasNodes}
-                    className={cn(
-                      'size-6 shrink-0',
-                      active &&
-                        'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
-                    )}
-                    onClick={() => {
-                      if (applyStyleToSelected({ textAlign: item.value })) return
-                      applyStyleToAll({ textAlign: item.value })
-                    }}
-                  >
-                    <Icon className='size-3' />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side='bottom' sideOffset={4}>
-                  {item.label}
-                </TooltipContent>
-              </Tooltip>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Border / Stroke */}
-      <div className='flex flex-col gap-0.5'>
-        <span className='text-[10px] font-medium text-muted-foreground uppercase'>
-          {t('render.effectBorder')}
-        </span>
-        <div className='flex min-w-0 items-center gap-1'>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant='outline'
-                size='icon-sm'
-                data-testid='render-stroke-enable'
-                className={cn(
-                  'size-7 shrink-0',
-                  currentStroke.enabled &&
-                    'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
-                )}
-                onClick={() =>
-                  applyStrokeSetting({ ...currentStroke, enabled: !currentStroke.enabled })
-                }
-              >
-                <SquareIcon className='size-3.5' />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side='bottom' sideOffset={4}>
-              {t('render.effectBorder')}
-            </TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div>
-                <ColorPicker
-                  value={currentStrokeColorHex}
-                  disabled={!hasNodes}
-                  triggerTestId='render-stroke-color-trigger'
-                  pickerTestId='render-stroke-color-picker'
-                  swatchTestId='render-stroke-color-swatch'
-                  inputTestId='render-stroke-color-input'
-                  pickButtonTestId='render-stroke-color-pick'
-                  onChange={(hex) => {
-                    applyStrokeSetting({
-                      ...currentStroke,
-                      color: hexToColor(
-                        hex,
-                        (currentStroke.color ?? DEFAULT_STROKE_COLOR)[3] ?? 255,
-                      ),
-                    })
-                  }}
-                  className='size-7'
-                />
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side='bottom' sideOffset={4}>
-              {t('render.strokeColorLabel')}
-            </TooltipContent>
-          </Tooltip>
-
-          <div className='flex min-w-0 flex-1 items-center rounded-md border border-input bg-background shadow-xs'>
+          <div className='flex min-w-0 items-center rounded-md border border-input bg-background shadow-xs'>
             <Button
-              type='button'
-              variant='ghost'
-              size='icon-sm'
-              className='size-7 shrink-0 rounded-r-none border-r'
-              onClick={() => updateStrokeWidth(currentStrokeWidth - STROKE_WIDTH_STEP)}
+                type='button'
+                variant='ghost'
+                size='icon-sm'
+                className='size-6 shrink-0 rounded-r-none border-r'
+                disabled={!selectedNode}
+                onClick={() => {
+                  const next = Math.max(6, Math.round((currentFontSize ?? 16) - 1))
+                  applyStyleToSelected({ fontSize: next })
+                }}
             >
               <MinusIcon className='size-3' />
             </Button>
             <Input
-              type='number'
-              step={String(STROKE_WIDTH_STEP)}
-              min={String(MIN_STROKE_WIDTH)}
-              max={String(MAX_STROKE_WIDTH)}
-              inputMode='decimal'
-              className='h-7 min-w-0 flex-1 [appearance:textfield] rounded-none border-0 px-1 text-center text-xs shadow-none focus-visible:ring-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
-              data-testid='render-stroke-width'
-              value={
-                Number.isFinite(currentStrokeWidth) ? currentStrokeWidth : DEFAULT_STROKE_WIDTH
-              }
-              onChange={(event) => {
-                const parsed = Number.parseFloat(event.target.value)
-                if (!Number.isFinite(parsed)) return
-                updateStrokeWidth(parsed)
-              }}
+                type='number'
+                step='1'
+                min='6'
+                max='300'
+                inputMode='numeric'
+                className='h-6 min-w-0 flex-1 [appearance:textfield] rounded-none border-0 px-0.5 text-center text-xs shadow-none focus-visible:ring-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                data-testid='render-font-size'
+                disabled={!selectedNode}
+                value={currentFontSize !== undefined ? Math.round(currentFontSize) : ''}
+                placeholder='auto'
+                onChange={(event) => {
+                  const parsed = Number.parseInt(event.target.value, 10)
+                  if (!Number.isFinite(parsed) || parsed < 1) return
+                  applyStyleToSelected({ fontSize: Math.min(300, parsed) })
+                }}
             />
             <Button
-              type='button'
-              variant='ghost'
-              size='icon-sm'
-              className='size-7 shrink-0 rounded-l-none border-l'
-              onClick={() => updateStrokeWidth(currentStrokeWidth + STROKE_WIDTH_STEP)}
+                type='button'
+                variant='ghost'
+                size='icon-sm'
+                className='size-6 shrink-0 rounded-l-none border-l'
+                disabled={!selectedNode}
+                onClick={() => {
+                  const next = Math.min(300, Math.round((currentFontSize ?? 16) + 1))
+                  applyStyleToSelected({ fontSize: next })
+                }}
             >
               <PlusIcon className='size-3' />
             </Button>
           </div>
+
+          <div className='flex items-center gap-0.5'>
+            {effectItems.map((item) => {
+              const active = currentEffect[item.key]
+              const Icon = item.Icon
+              return (
+                  <Tooltip key={item.key}>
+                    <TooltipTrigger asChild>
+                      <Button
+                          variant='outline'
+                          size='icon-sm'
+                          aria-label={item.label}
+                          data-testid={`render-effect-toggle-${item.key}`}
+                          className={cn(
+                              'size-6 shrink-0',
+                              active &&
+                              'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
+                          )}
+                          onClick={() => {
+                            const nextEffect: TextShaderEffect = {
+                              ...currentEffect,
+                              [item.key]: !active,
+                            }
+                            if (applyStyleToSelected({ effect: nextEffect })) return
+                            setRenderEffect({
+                              bold: nextEffect.bold ?? false,
+                              italic: nextEffect.italic ?? false,
+                            })
+                          }}
+                      >
+                        <Icon className='size-3' />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side='bottom' sideOffset={4}>
+                      {item.label}
+                    </TooltipContent>
+                  </Tooltip>
+              )
+            })}
+          </div>
+
+          {/* Text case: selected block(s) only, or every page when nothing is selected. */}
+          <div className='flex items-center gap-0.5'>
+            {TEXT_CASE_TRANSFORMS.map(({ key, label, titleKey, fn }) => (
+                <Tooltip key={key}>
+                  <TooltipTrigger asChild>
+                    <Button
+                        type='button'
+                        variant='outline'
+                        size='icon-sm'
+                        aria-label={t(titleKey)}
+                        data-testid={`render-text-case-${key}`}
+                        disabled={isApplyingCase}
+                        className='h-6 w-auto shrink-0 px-1.5 text-[10px] font-semibold'
+                        onClick={() => void applyTextCase(fn)}
+                    >
+                      {label}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' sideOffset={4}>
+                    {t(titleKey)}
+                    {selectedNodes.length === 0 && ` — ${t('render.textCaseScopeAll')}`}
+                  </TooltipContent>
+                </Tooltip>
+            ))}
+          </div>
+
+          <div className='flex items-center gap-0.5'>
+            {textAlignItems.map((item) => {
+              const active = effectiveAlign === item.value
+              const Icon = item.Icon
+              return (
+                  <Tooltip key={item.value}>
+                    <TooltipTrigger asChild>
+                      <Button
+                          variant='outline'
+                          size='icon-sm'
+                          aria-label={item.label}
+                          data-testid={`render-align-${item.value}`}
+                          disabled={!hasNodes}
+                          className={cn(
+                              'size-6 shrink-0',
+                              active &&
+                              'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
+                          )}
+                          onClick={() => {
+                            if (applyStyleToSelected({ textAlign: item.value })) return
+                            applyStyleToAll({ textAlign: item.value })
+                          }}
+                      >
+                        <Icon className='size-3' />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side='bottom' sideOffset={4}>
+                      {item.label}
+                    </TooltipContent>
+                  </Tooltip>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Line / letter spacing */}
+        <div className='grid w-full grid-cols-2 items-end gap-x-1.5'>
+        <span className='text-[10px] font-medium text-muted-foreground uppercase'>
+          {t('render.lineSpacingLabel')}
+        </span>
+          <span className='text-[10px] font-medium text-muted-foreground uppercase'>
+          {t('render.letterSpacingLabel')}
+        </span>
+
+          <Input
+              type='number'
+              step='0.1'
+              min='0.5'
+              max='4'
+              inputMode='decimal'
+              className='h-6 min-w-0 text-xs shadow-none'
+              data-testid='render-line-spacing'
+              disabled={isApplyingSpacing}
+              value={Number(currentLineSpacing.toFixed(2))}
+              onChange={(event) => {
+                const parsed = Number.parseFloat(event.target.value)
+                if (!Number.isFinite(parsed) || parsed <= 0) return
+                void applySpacing({ lineSpacing: Math.min(4, parsed) })
+              }}
+          />
+
+          <Input
+              type='number'
+              step='0.5'
+              min='-10'
+              max='60'
+              inputMode='decimal'
+              className='h-6 min-w-0 text-xs shadow-none'
+              data-testid='render-letter-spacing'
+              disabled={isApplyingSpacing}
+              value={Number(currentLetterSpacing.toFixed(2))}
+              onChange={(event) => {
+                const parsed = Number.parseFloat(event.target.value)
+                if (!Number.isFinite(parsed)) return
+                void applySpacing({ letterSpacing: Math.max(-10, Math.min(60, parsed)) })
+              }}
+          />
+        </div>
+
+        {/* Border / Stroke */}
+        <div className='flex flex-col gap-0.5'>
+        <span className='text-[10px] font-medium text-muted-foreground uppercase'>
+          {t('render.effectBorder')}
+        </span>
+          <div className='flex min-w-0 items-center gap-1'>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                    variant='outline'
+                    size='icon-sm'
+                    data-testid='render-stroke-enable'
+                    className={cn(
+                        'size-7 shrink-0',
+                        currentStroke.enabled &&
+                        'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
+                    )}
+                    onClick={() =>
+                        applyStrokeSetting({ ...currentStroke, enabled: !currentStroke.enabled })
+                    }
+                >
+                  <SquareIcon className='size-3.5' />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side='bottom' sideOffset={4}>
+                {t('render.effectBorder')}
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div>
+                  <ColorPicker
+                      value={currentStrokeColorHex}
+                      disabled={!hasNodes}
+                      triggerTestId='render-stroke-color-trigger'
+                      pickerTestId='render-stroke-color-picker'
+                      swatchTestId='render-stroke-color-swatch'
+                      inputTestId='render-stroke-color-input'
+                      pickButtonTestId='render-stroke-color-pick'
+                      onChange={(hex) => {
+                        applyStrokeSetting({
+                          ...currentStroke,
+                          color: hexToColor(
+                              hex,
+                              (currentStroke.color ?? DEFAULT_STROKE_COLOR)[3] ?? 255,
+                          ),
+                        })
+                      }}
+                      className='size-7'
+                  />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side='bottom' sideOffset={4}>
+                {t('render.strokeColorLabel')}
+              </TooltipContent>
+            </Tooltip>
+
+            <div className='flex min-w-0 flex-1 items-center rounded-md border border-input bg-background shadow-xs'>
+              <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-sm'
+                  className='size-7 shrink-0 rounded-r-none border-r'
+                  onClick={() => updateStrokeWidth(currentStrokeWidth - STROKE_WIDTH_STEP)}
+              >
+                <MinusIcon className='size-3' />
+              </Button>
+              <Input
+                  type='number'
+                  step={String(STROKE_WIDTH_STEP)}
+                  min={String(MIN_STROKE_WIDTH)}
+                  max={String(MAX_STROKE_WIDTH)}
+                  inputMode='decimal'
+                  className='h-7 min-w-0 flex-1 [appearance:textfield] rounded-none border-0 px-1 text-center text-xs shadow-none focus-visible:ring-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                  data-testid='render-stroke-width'
+                  value={
+                    Number.isFinite(currentStrokeWidth) ? currentStrokeWidth : DEFAULT_STROKE_WIDTH
+                  }
+                  onChange={(event) => {
+                    const parsed = Number.parseFloat(event.target.value)
+                    if (!Number.isFinite(parsed)) return
+                    updateStrokeWidth(parsed)
+                  }}
+              />
+              <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon-sm'
+                  className='size-7 shrink-0 rounded-l-none border-l'
+                  onClick={() => updateStrokeWidth(currentStrokeWidth + STROKE_WIDTH_STEP)}
+              >
+                <PlusIcon className='size-3' />
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
   )
 }

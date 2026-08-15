@@ -56,7 +56,8 @@
       "tr-TR": "Türkçe",
       "ko-KR": "한국어",
       "pt-BR": "Português brasileiro"
-    }
+    },
+    "infiniteScroll": "Infinite Scroll"
   },
   "welcome": {
     "title": "Koharu",
@@ -109,7 +110,8 @@
     "mask": "Mask",
     "llm": "LLM",
     "ai": "AI",
-    "render": "Render"
+    "render": "Render",
+    "fontReplace": "Replace"
   },
   "layers": {
     "title": "Layers",
@@ -134,7 +136,12 @@
     "showRendered": "Show rendered text",
     "showTextBlocks": "Show text blocks",
     "inpaint": "Inpaint",
-    "inpaintTooltip": "Apply inpainting"
+    "inpaintTooltip": "Apply inpainting",
+    "fill": "Fill",
+    "fillDetect": "Detect color",
+    "fillDetectHint": "Auto-detects the surrounding color",
+    "fillSolid": "Solid color",
+    "fillSolidApply": "Apply solid fill"
   },
   "llm": {
     "title": "LLM",
@@ -257,7 +264,14 @@
     "fontStyles": {
       "italicWithName": "{{name}} Italic",
       "regularItalic": "Regular Italic"
-    }
+    },
+    "textCaseLower": "lowercase",
+    "textCaseUpper": "UPPERCASE",
+    "textCaseSentence": "Sentence case",
+    "textCaseTitle": "Title Case",
+    "textCaseScopeAll": "applies to every page (nothing selected)",
+    "lineSpacingLabel": "Line spacing",
+    "letterSpacingLabel": "Letter spacing"
   },
   "textBlocks": {
     "emptyPrompt": "Open an image to see text blocks.",
@@ -294,7 +308,8 @@
     "block": "Block",
     "brush": "Brush",
     "repairBrush": "Repair brush",
-    "eraser": "Eraser"
+    "eraser": "Eraser",
+    "crop": "Crop image"
   },
   "download": {
     "title": "Downloading"
@@ -438,7 +453,14 @@
     "shortcutReset": "Reset Keybinds",
     "shortcutResetDescription": "This will restore all shortcuts to their default values. Your saved changes will be lost.",
     "shortcutConflict": "Key combination already in use",
-    "shortcutInvalid": "This key cannot be used as a shortcut"
+    "shortcutInvalid": "This key cannot be used as a shortcut",
+    "apiKeysExtra": "Additional keys (rotation)",
+    "apiKeysExtraCount": "{{count}} key",
+    "apiKeysExtraCount_other": "{{count}} keys",
+    "apiKeysExtraDescription": "Extra keys tried in order — useful for spreading requests across multiple keys when one hits a rate limit. Adding one never replaces existing keys.",
+    "apiKeysExtraPlaceholder": "Paste a key and press Add",
+    "apiKeysExtraAdd": "Add",
+    "apiKeysExtraRemove": "Remove key"
   },
   "updater": {
     "available": {
@@ -458,5 +480,36 @@
     },
     "close": "Close",
     "retry": "Retry"
+  },
+  "fontReplace": {
+    "sourceLabel": "Original font",
+    "sourcePlaceholder": "Select a font used in the document",
+    "targetLabel": "New font",
+    "targetPlaceholder": "Select a replacement font",
+    "submit": "Replace",
+    "replacing": "Replacing…",
+    "resultCount": "Replaced in {{count}} text block(s).",
+    "resultEmpty": "No text blocks used that font.",
+    "noFontsUsed": "No fonts detected in the document yet.",
+    "sectionFont": "Swap font"
+  },
+  "textReplace": {
+    "title": "Find & Replace",
+    "findLabel": "Find",
+    "findPlaceholder": "Word or phrase to find",
+    "replaceLabel": "Replace with",
+    "replacePlaceholder": "Replacement text",
+    "submit": "Replace All",
+    "replacing": "Replacing…",
+    "resultCount": "Replaced in {{count}} text block(s), across every page.",
+    "resultEmpty": "No matches found."
+  },
+  "view": {
+    "continuousOpenPage": "Click to open this page for editing",
+    "continuousLoading": "Loading…"
+  },
+  "crop": {
+    "apply": "Apply crop",
+    "cancel": "Cancel"
   }
 }

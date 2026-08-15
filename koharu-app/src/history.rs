@@ -14,9 +14,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use crate::persistence;
 use anyhow::{Context, Result};
 use koharu_core::{Op, Scene};
-use serde::{Deserialize, Serialize};
 
 /// Default cap for the in-memory undo stack. The log on disk is not capped —
 /// it's compacted on snapshot.
@@ -25,12 +25,6 @@ const DEFAULT_UNDO_LIMIT: usize = 500;
 // ---------------------------------------------------------------------------
 // Log frames
 // ---------------------------------------------------------------------------
-
-#[derive(Serialize, Deserialize)]
-struct LogFrame {
-    epoch: u64,
-    op: Op,
-}
 
 // ---------------------------------------------------------------------------
 // History
@@ -141,11 +135,7 @@ impl History {
     // --- internals ---------------------------------------------------------
 
     fn write_frame(&mut self, op: &Op) -> Result<()> {
-        let frame = LogFrame {
-            epoch: self.epoch,
-            op: op.clone(),
-        };
-        let bytes = postcard::to_allocvec(&frame).context("encode log frame")?;
+        let bytes = persistence::encode_log_frame(self.epoch, op).context("encode v1 log frame")?;
         let len = u32::try_from(bytes.len()).context("log frame too large")?;
         self.log.write_all(&len.to_le_bytes())?;
         self.log.write_all(&bytes)?;
@@ -198,7 +188,7 @@ pub fn replay(log_path: &Path, start_epoch: u64, scene: &mut Scene) -> Result<u6
             }
             Err(e) => return Err(anyhow::Error::new(e).context("read log frame body")),
         }
-        let frame: LogFrame = match postcard::from_bytes(&buf) {
+        let (frame_epoch, mut op, format) = match persistence::decode_log_frame(&buf) {
             Ok(frame) => frame,
             Err(err) => {
                 tracing::warn!(
@@ -209,13 +199,126 @@ pub fn replay(log_path: &Path, start_epoch: u64, scene: &mut Scene) -> Result<u6
                 break;
             }
         };
-        if frame.epoch > epoch {
-            let mut op = frame.op;
+        if format == persistence::Format::LegacyV0 {
+            tracing::info!(path = %log_path.display(), "replaying legacy v0 history frame");
+        }
+        if frame_epoch > epoch {
             op.apply(scene).context("replay op")?;
-            epoch = frame.epoch;
+            epoch = frame_epoch;
         }
     }
     // Seek to end so subsequent appends go after the last valid frame.
     let _ = reader.seek(SeekFrom::End(0));
     Ok(epoch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn legacy_history_frame_replays_and_new_frame_is_versioned() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("history.log");
+        let fixture = crate::persistence::LegacyLogFrameV0 {
+            epoch: 1,
+            op: crate::persistence::LegacyOpV0::UpdateProjectMeta {
+                patch: crate::persistence::LegacyProjectMetaPatchV0 {
+                    name: Some("legacy history".into()),
+                    style: None,
+                    updated_at: Some(Utc::now()),
+                },
+                prev: crate::persistence::LegacyProjectMetaPatchV0::default(),
+            },
+        };
+        let legacy_bytes = crate::persistence::encode_legacy_log_frame_for_test(&fixture);
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&(legacy_bytes.len() as u32).to_le_bytes());
+        raw.extend_from_slice(&legacy_bytes);
+        std::fs::write(&path, raw).unwrap();
+
+        let mut scene = Scene::default();
+        let epoch = replay(&path, 0, &mut scene).unwrap();
+        assert_eq!(epoch, 1);
+        assert_eq!(scene.project.name, "legacy history");
+
+        let mut history = History::open(&path, epoch).unwrap();
+        history
+            .apply(
+                &mut scene,
+                Op::UpdateProjectMeta {
+                    patch: koharu_core::ProjectMetaPatch {
+                        name: Some("new history".into()),
+                        ..Default::default()
+                    },
+                    prev: Default::default(),
+                },
+            )
+            .unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let first_len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+        assert_eq!(&bytes[4..4 + first_len], legacy_bytes.as_slice());
+        let second = 4 + first_len;
+        let second_len = u32::from_le_bytes(bytes[second..second + 4].try_into().unwrap()) as usize;
+        assert!(bytes[second + 4..second + 4 + second_len].starts_with(b"KHRLOG\0"));
+        drop(history);
+
+        let mut reopened_scene = Scene::default();
+        assert_eq!(replay(&path, 0, &mut reopened_scene).unwrap(), 2);
+        assert_eq!(reopened_scene.project.name, "new history");
+    }
+
+    #[test]
+    fn v1_history_frame_replays_and_new_frame_is_v2() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("history.log");
+        let fixture = crate::persistence::LegacyLogFrameV0 {
+            epoch: 4,
+            op: crate::persistence::LegacyOpV0::UpdateProjectMeta {
+                patch: crate::persistence::LegacyProjectMetaPatchV0 {
+                    name: Some("v1 history".into()),
+                    style: None,
+                    updated_at: Some(Utc::now()),
+                },
+                prev: crate::persistence::LegacyProjectMetaPatchV0::default(),
+            },
+        };
+        let v1_bytes = crate::persistence::encode_v1_log_frame_for_test(&fixture);
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&(v1_bytes.len() as u32).to_le_bytes());
+        raw.extend_from_slice(&v1_bytes);
+        std::fs::write(&path, raw).unwrap();
+
+        let mut scene = Scene::default();
+        let epoch = replay(&path, 0, &mut scene).unwrap();
+        assert_eq!(epoch, 4);
+        assert_eq!(scene.project.name, "v1 history");
+
+        let mut history = History::open(&path, epoch).unwrap();
+        history
+            .apply(
+                &mut scene,
+                Op::UpdateProjectMeta {
+                    patch: koharu_core::ProjectMetaPatch {
+                        name: Some("v2 history".into()),
+                        ..Default::default()
+                    },
+                    prev: Default::default(),
+                },
+            )
+            .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let first_len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+        let second = 4 + first_len;
+        let second_len = u32::from_le_bytes(bytes[second..second + 4].try_into().unwrap()) as usize;
+        let frame = &bytes[second + 4..second + 4 + second_len];
+        assert!(frame.starts_with(b"KHRLOG\0"));
+        assert_eq!(u16::from_le_bytes([frame[7], frame[8]]), 2);
+
+        let mut reopened_scene = Scene::default();
+        assert_eq!(replay(&path, 0, &mut reopened_scene).unwrap(), 5);
+        assert_eq!(reopened_scene.project.name, "v2 history");
+    }
 }

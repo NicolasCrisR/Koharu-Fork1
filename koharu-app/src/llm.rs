@@ -288,14 +288,14 @@ impl Model {
                 for config in configs {
                     providers.push(build_provider(provider_id, config)?);
                 }
-                let provider: Box<dyn AnyProvider> = Box::new(ManagedProvider::new(providers));
+                let provider: Box<dyn AnyProvider> =
+                    Box::new(ManagedProvider::new(provider_id, providers));
                 self.load_provider(request.target, provider).await?;
                 Ok(())
             }
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -456,6 +456,11 @@ pub fn provider_configs_from_settings(
     let stored = config.providers.iter().find(|p| p.id == provider_id);
     let base_url = stored.and_then(|p| p.base_url.clone());
     let keys = stored.map(|p| p.all_api_keys()).unwrap_or_default();
+    tracing::debug!(
+        provider = provider_id,
+        key_count = keys.len(),
+        "loaded API keys for provider"
+    );
 
     if keys.is_empty() {
         return vec![ProviderConfig {

@@ -6,11 +6,18 @@
 
 export interface ProviderConfig {
   /**
-     * Populated from credential storage on `load()`, never written to config.toml.
-  Serializes as `"[REDACTED]"` in API responses.
-     * @nullable
-     */
+   * Populated from credential storage on `load()`, never written to config.toml.
+   Serializes as `"[REDACTED]"` in API responses.
+   * @nullable
+   */
   api_key?: string | null
+  /**
+   * Additional keys for round-robin rotation when one hits a rate limit.
+   * Unlike `api_key`, these are NOT redacted — stored/returned as plain
+   * text (a deliberate simplification for a local, single-user tool).
+   * Omitted from responses when empty.
+   */
+  api_keys?: string[]
   /** @nullable */
   base_url?: string | null
   id: string

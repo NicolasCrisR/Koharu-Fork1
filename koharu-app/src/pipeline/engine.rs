@@ -63,6 +63,9 @@ pub struct PipelineRunOptions {
     /// and process just that one block. Other engines ignore it.
     pub region: Option<Region>,
     pub reading_order: Option<ReadingOrder>,
+    /// Explicit RGBA color for the "Preencher → Sólido" fill engine. Every
+    /// other engine ignores it.
+    pub fill_color: Option<[u8; 4]>,
 }
 
 // ---------------------------------------------------------------------------

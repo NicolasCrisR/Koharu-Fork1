@@ -74,12 +74,64 @@ pub struct ProviderDescriptor {
     pub models: ProviderCatalogModels,
     pub build: fn(ProviderConfig) -> anyhow::Result<Box<dyn AnyProvider>>,
 }
+/// What kind of quota limit a 429 corresponds to, per Gemini's
+/// `QuotaFailure.violations[].quotaId` (falls back to a duration heuristic,
+/// or `Unknown`, when that field is absent or unrecognized).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaKind {
+    /// Per-minute (or otherwise short-window) rate limit.
+    RateLimit,
+    /// Per-day quota. NOTE: observed in practice (see `retry_after` below)
+    /// this does *not* imply a multi-hour wait — Gemini's free tier sends
+    /// `quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier` together
+    /// with a `retryDelay` of well under a minute. Always prefer the actual
+    /// `retry_after` value over assumptions based on this variant.
+    DailyQuota,
+    /// Couldn't determine the kind (no recognizable `quotaId`, and no
+    /// `retry_after` to fall back on either).
+    Unknown,
+}
+
+impl QuotaKind {
+    /// Classify from Gemini's `quotaId` (e.g.
+    /// `GenerateRequestsPerMinutePerProjectPerModel-FreeTier` vs
+    /// `GenerateRequestsPerDayPerProjectPerModel-FreeTier`), falling back to
+    /// a duration heuristic when `quota_id` is absent/unrecognized: anything
+    /// under 10 minutes is assumed to be a rate limit, since we've observed
+    /// "daily" quota errors reporting short `retryDelay`s in practice.
+    fn classify(quota_id: Option<&str>, retry_after: Option<Duration>) -> Self {
+        if let Some(id) = quota_id {
+            let lower = id.to_ascii_lowercase();
+            if lower.contains("perminute") || lower.contains("per_minute") {
+                return Self::RateLimit;
+            }
+            if lower.contains("perday") || lower.contains("per_day") {
+                return Self::DailyQuota;
+            }
+        }
+        match retry_after {
+            Some(wait) if wait < Duration::from_secs(10 * 60) => Self::RateLimit,
+            Some(_) => Self::DailyQuota,
+            None => Self::Unknown,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
     #[error("quota exceeded for provider {provider}")]
     QuotaExceeded {
         provider: String,
         retry_after: Option<Duration>,
+        quota_kind: QuotaKind,
+    },
+    /// Every key for this provider is currently in cooldown. Returned
+    /// immediately (Fase 6) instead of silently burning quota-retry
+    /// attempts scanning keys that are all known to be unavailable.
+    #[error("all keys cooling down for provider {provider}, next available in {:?}", .retry_after)]
+    AllProvidersCoolingDown {
+        provider: String,
+        retry_after: Duration,
     },
     #[error("{provider} API request failed ({status}): {body}")]
     Fatal {
@@ -87,6 +139,79 @@ pub enum ProviderError {
         status: u16,
         body: String,
     },
+}
+
+/// Gemini's error body shape (also used by other Google APIs), e.g.:
+/// ```json
+/// { "error": { "code": 429, "message": "...", "status": "RESOURCE_EXHAUSTED",
+///   "details": [
+///     { "@type": ".../google.rpc.QuotaFailure",
+///       "violations": [{ "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", ... }] },
+///     { "@type": ".../google.rpc.RetryInfo", "retryDelay": "55s" }
+///   ] } }
+/// ```
+/// Both `details` entries are optional and may be absent depending on the
+/// error; every field here is therefore best-effort.
+#[derive(Debug, serde::Deserialize)]
+struct GoogleErrorBody {
+    error: Option<GoogleErrorInner>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GoogleErrorInner {
+    #[serde(default)]
+    details: Vec<serde_json::Value>,
+}
+
+/// Extracts `retry_after` (from `google.rpc.RetryInfo.retryDelay`, e.g.
+/// `"55s"`) and the first `quotaId` (from `google.rpc.QuotaFailure`) out of
+/// a Gemini-style JSON error body. Returns `(None, None)` if the body isn't
+/// JSON, isn't this shape, or doesn't carry these fields — callers should
+/// treat that as "unknown", not as an error, since not every provider (or
+/// every error from Gemini) uses this format.
+fn parse_google_error_details(body: &str) -> (Option<Duration>, Option<String>) {
+    let Ok(parsed) = serde_json::from_str::<GoogleErrorBody>(body) else {
+        return (None, None);
+    };
+    let Some(inner) = parsed.error else {
+        return (None, None);
+    };
+
+    let mut retry_after = None;
+    let mut quota_id = None;
+
+    for detail in &inner.details {
+        let type_field = detail.get("@type").and_then(|v| v.as_str()).unwrap_or("");
+
+        if type_field.ends_with("RetryInfo")
+            && let Some(delay) = detail.get("retryDelay").and_then(|v| v.as_str())
+        {
+            retry_after = parse_retry_delay(delay);
+        }
+
+        if type_field.ends_with("QuotaFailure")
+            && let Some(violations) = detail.get("violations").and_then(|v| v.as_array())
+            && let Some(first) = violations.first()
+            && let Some(id) = first.get("quotaId").and_then(|v| v.as_str())
+        {
+            quota_id = Some(id.to_string());
+        }
+    }
+
+    (retry_after, quota_id)
+}
+
+/// Parses a Google-style `retryDelay` string, e.g. `"55s"` or
+/// `"1.500s"` (seconds, with an optional fractional part, per the
+/// `google.protobuf.Duration` JSON mapping).
+fn parse_retry_delay(value: &str) -> Option<Duration> {
+    let seconds_str = value.strip_suffix('s')?;
+    let seconds: f64 = seconds_str.parse().ok()?;
+    if seconds.is_finite() && seconds >= 0.0 {
+        Some(Duration::from_secs_f64(seconds))
+    } else {
+        None
+    }
 }
 
 pub async fn ensure_provider_success(
@@ -98,7 +223,13 @@ pub async fn ensure_provider_success(
         return Ok(response);
     }
 
-    let retry_after = response
+    // `Retry-After` is the HTTP-standard place for this, but Gemini (and
+    // most Google APIs) don't set it — the real info lives in the JSON
+    // body's `RetryInfo`/`QuotaFailure` details (see
+    // `parse_google_error_details` above). We still check the header first
+    // since it costs nothing and some other provider might use it; the body
+    // is the primary source now.
+    let header_retry_after = response
         .headers()
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
@@ -118,11 +249,26 @@ pub async fn ensure_provider_success(
         || body_lower.contains("credit balance is too low");
 
     if quota_exceeded {
+        let (body_retry_after, quota_id) = parse_google_error_details(&body);
+        // Prefer the body's `retryDelay` — it's what Gemini actually sends —
+        // then the header, then leave it to the caller's default.
+        let retry_after = body_retry_after.or(header_retry_after);
+        let quota_kind = QuotaKind::classify(quota_id.as_deref(), retry_after);
+
+        tracing::debug!(
+            %provider,
+            ?retry_after,
+            ?quota_kind,
+            quota_id = quota_id.as_deref().unwrap_or("none"),
+            "quota exceeded, parsed details from error body"
+        );
+
         return Err(ProviderError::QuotaExceeded {
             provider: provider.to_string(),
             retry_after,
+            quota_kind,
         }
-            .into());
+        .into());
     }
 
     Err(ProviderError::Fatal {
@@ -130,9 +276,8 @@ pub async fn ensure_provider_success(
         status: status.as_u16(),
         body,
     }
-        .into())
+    .into())
 }
-
 
 pub trait AnyProvider: Send + Sync {
     fn translate<'a>(

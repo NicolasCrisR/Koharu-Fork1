@@ -1,0 +1,14 @@
+C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\deps\serde-d98ecd27405af2f1.d: C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\build\serde-5e17331635e3bfc4\out/private.rs
+
+C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\deps\libserde-d98ecd27405af2f1.rlib: C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\build\serde-5e17331635e3bfc4\out/private.rs
+
+C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\deps\libserde-d98ecd27405af2f1.rmeta: C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\build\serde-5e17331635e3bfc4\out/private.rs
+
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\build\serde-5e17331635e3bfc4\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\ZEF_L\\Downloads\\koharu-0.61.2\\koharu-0.61.2\\target-diagnostic\\debug\\build\\serde-5e17331635e3bfc4\\out

@@ -1,0 +1,11 @@
+C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\deps\winapi_util-540b8d92cbd4efe8.d: C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\lib.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\console.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\file.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\sysinfo.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\win.rs
+
+C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\deps\libwinapi_util-540b8d92cbd4efe8.rlib: C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\lib.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\console.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\file.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\sysinfo.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\win.rs
+
+C:\Users\ZEF_L\Downloads\koharu-0.61.2\koharu-0.61.2\target-diagnostic\debug\deps\libwinapi_util-540b8d92cbd4efe8.rmeta: C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\lib.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\console.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\file.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\sysinfo.rs C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\win.rs
+
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\lib.rs:
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\console.rs:
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\file.rs:
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\sysinfo.rs:
+C:\Users\ZEF_L\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\winapi-util-0.1.11\src\win.rs:

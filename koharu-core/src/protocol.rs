@@ -240,4 +240,7 @@ pub struct ProviderPatch {
     pub base_url: Option<String>,
     /// `"[REDACTED]"` → keep existing keyring secret; empty → clear; otherwise save.
     pub api_key: Option<String>,
+    /// `None` = leave unchanged. `Some(vec![])` = clear the list. Entries
+    /// are trimmed/empty-filtered on apply; duplicates are kept but logged.
+    pub api_keys: Option<Vec<String>>,
 }

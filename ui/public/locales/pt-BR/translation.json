@@ -41,7 +41,8 @@
     "language": "Idioma",
     "customPipeline": "Pipeline personalizado",
     "runCustomCurrent": "Executar personalizado (Página atual)",
-    "runCustomAll": "Executar personalizado (Todas as páginas)"
+    "runCustomAll": "Executar personalizado (Todas as páginas)",
+    "infiniteScroll": "Rolagem Infinita"
   },
   "welcome": {
     "title": "Koharu",
@@ -93,7 +94,8 @@
     "processing": "Processamento",
     "mask": "Máscara",
     "llm": "LLM",
-    "render": "Renderização"
+    "render": "Renderização",
+    "fontReplace": "Substituir"
   },
   "layers": {
     "title": "Camadas",
@@ -118,7 +120,12 @@
     "showRendered": "Mostrar texto renderizado",
     "showTextBlocks": "Mostrar blocos de texto",
     "inpaint": "Inpaint",
-    "inpaintTooltip": "Aplicar inpainting"
+    "inpaintTooltip": "Aplicar inpainting",
+    "fill": "Preencher",
+    "fillDetect": "Detectar cor",
+    "fillDetectHint": "Detecta automaticamente a cor ao redor",
+    "fillSolid": "Cor sólida",
+    "fillSolidApply": "Aplicar preenchimento sólido"
   },
   "llm": {
     "title": "LLM",
@@ -225,7 +232,14 @@
     "fontStyles": {
       "italicWithName": "{{name}} Itálico",
       "regularItalic": "Regular Itálico"
-    }
+    },
+    "textCaseLower": "minúsculas",
+    "textCaseUpper": "MAIÚSCULAS",
+    "textCaseSentence": "Primeira letra da frase",
+    "textCaseTitle": "Primeira Letra De Cada Palavra",
+    "textCaseScopeAll": "aplica a todas as páginas (nada selecionado)",
+    "lineSpacingLabel": "Espaçamento entre linhas",
+    "letterSpacingLabel": "Espaçamento entre letras"
   },
   "textBlocks": {
     "emptyPrompt": "Abra uma imagem para ver os blocos de texto.",
@@ -262,7 +276,8 @@
     "block": "Bloco",
     "brush": "Pincel",
     "repairBrush": "Pincel de reparo",
-    "eraser": "Borracha"
+    "eraser": "Borracha",
+    "crop": "Cortar imagem"
   },
   "download": {
     "title": "Baixando"
@@ -402,7 +417,14 @@
     "shortcutReset": "Redefinir Atalhos",
     "shortcutResetDescription": "Isso restaurará todos os atalhos para seus valores padrão. Suas alterações salvas serão perdidas.",
     "shortcutConflict": "Combinação de teclas já em uso",
-    "shortcutInvalid": "Esta tecla não pode ser usada como atalho"
+    "shortcutInvalid": "Esta tecla não pode ser usada como atalho",
+    "apiKeysExtra": "Chaves adicionais (rotação)",
+    "apiKeysExtraCount": "{{count}} chave",
+    "apiKeysExtraCount_other": "{{count}} chaves",
+    "apiKeysExtraDescription": "Chaves extras, tentadas em ordem — útil pra distribuir as requisições entre várias chaves quando uma bate no limite de taxa. Adicionar uma nunca substitui as que já existem.",
+    "apiKeysExtraPlaceholder": "Cole uma chave e clique em Adicionar",
+    "apiKeysExtraAdd": "Adicionar",
+    "apiKeysExtraRemove": "Remover chave"
   },
   "updater": {
     "available": {
@@ -422,5 +444,36 @@
     },
     "close": "Fechar",
     "retry": "Tentar novamente"
+  },
+  "fontReplace": {
+    "sourceLabel": "Fonte inicial",
+    "sourcePlaceholder": "Selecionar fonte usada no documento",
+    "targetLabel": "Nova fonte",
+    "targetPlaceholder": "Selecionar fonte de substituição",
+    "submit": "Substituir",
+    "replacing": "Substituindo…",
+    "resultCount": "Substituída em {{count}} bloco(s) de texto.",
+    "resultEmpty": "Nenhum bloco de texto usava essa fonte.",
+    "noFontsUsed": "Nenhuma fonte detectada no documento ainda.",
+    "sectionFont": "Trocar fonte"
+  },
+  "textReplace": {
+    "title": "Localizar e Substituir",
+    "findLabel": "Localizar",
+    "findPlaceholder": "Palavra ou expressão a localizar",
+    "replaceLabel": "Substituir por",
+    "replacePlaceholder": "Texto de substituição",
+    "submit": "Substituir Tudo",
+    "replacing": "Substituindo…",
+    "resultCount": "Substituído em {{count}} bloco(s) de texto, em todas as páginas.",
+    "resultEmpty": "Nenhuma ocorrência encontrada."
+  },
+  "view": {
+    "continuousOpenPage": "Clique para abrir esta página para edição",
+    "continuousLoading": "Carregando…"
+  },
+  "crop": {
+    "apply": "Aplicar corte",
+    "cancel": "Cancelar"
   }
 }

@@ -50,6 +50,10 @@ pub struct StartPipelineRequest {
     pub default_font: Option<String>,
     #[serde(default)]
     pub reading_order: Option<ReadingOrder>,
+    /// Explicit RGBA color for the `mask-fill-solid` engine. Every other
+    /// engine ignores it.
+    #[serde(default)]
+    pub fill_color: Option<[u8; 4]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -88,6 +92,7 @@ async fn start_pipeline(
             text_node_ids: req.text_node_ids,
             region: req.region,
             reading_order: req.reading_order,
+            fill_color: req.fill_color,
         },
     };
 

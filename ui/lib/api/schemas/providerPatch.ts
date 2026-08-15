@@ -10,6 +10,12 @@ export interface ProviderPatch {
    * @nullable
    */
   apiKey?: string | null
+  /**
+   * `undefined`/omitted = leave unchanged. `[]` = clear the list. Entries
+   * are trimmed/empty-filtered on apply; duplicates are kept but logged.
+   * @nullable
+   */
+  apiKeys?: string[] | null
   /** @nullable */
   baseUrl?: string | null
   id: string

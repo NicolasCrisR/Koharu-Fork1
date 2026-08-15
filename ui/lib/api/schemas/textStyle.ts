@@ -13,6 +13,10 @@ export interface TextStyle {
   fontFamilies: string[]
   /** @nullable */
   fontSize?: number | null
+  /** Multiplier applied to the font's natural line height. `null`/`1` matches the previous (implicit) behavior. @nullable */
+  lineSpacing?: number | null
+  /** Extra space, in the same units as fontSize, inserted after every character. `null`/`0` matches the previous (implicit) behavior. @nullable */
+  letterSpacing?: number | null
   stroke?: null | TextStrokeStyle
   textAlign?: null | TextAlign
 }

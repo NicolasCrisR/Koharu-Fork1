@@ -3323,6 +3323,16 @@
             "type": ["number", "null"],
             "format": "float"
           },
+          "lineSpacing": {
+            "description": "Multiplier applied to the font's natural line height. `None` is the historical layout behavior (`1.0`). Persisted only in scene format V2.",
+            "type": ["number", "null"],
+            "format": "float"
+          },
+          "letterSpacing": {
+            "description": "Extra layout units inserted after each grapheme cluster. `None` is the historical layout behavior (`0.0`). Persisted only in scene format V2.",
+            "type": ["number", "null"],
+            "format": "float"
+          },
           "stroke": {
             "oneOf": [
               {

@@ -102,6 +102,60 @@ impl Default for RenderOptions {
 }
 
 const MAX_SUPERSAMPLING_FACTOR: u32 = 4;
+const RGBA_BYTES_PER_PIXEL: u64 = 4;
+/// A single text sprite should never need this much backing storage. Keeping
+/// this below the process-breaking range also leaves room for the pixmap's
+/// temporary copies during downsampling.
+const MAX_RENDER_SURFACE_BYTES: u64 = 256 * 1024 * 1024; // 256 MiB
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RenderSurface {
+    width: u32,
+    height: u32,
+}
+
+fn checked_logical_dimension(value: f32, name: &str) -> Result<u32> {
+    // Do this before `as u32`: Rust's float-to-int cast saturates, which can
+    // turn an invalid layout measurement into a very large valid-looking
+    // surface dimension.
+    if !value.is_finite() || value <= 0.0 || value >= u32::MAX as f32 {
+        bail!("invalid logical render {name} {value}");
+    }
+    Ok(value.ceil() as u32)
+}
+
+fn rgba_byte_len(width: u32, height: u32) -> Result<u64> {
+    u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(RGBA_BYTES_PER_PIXEL))
+        .context("RGBA render surface byte-size overflow")
+}
+
+fn checked_render_surface(width: u32, height: u32, raster_scale: u32) -> Result<RenderSurface> {
+    if width == 0 || height == 0 || raster_scale == 0 {
+        bail!(
+            "invalid render surface dimensions: logical={width}x{height}, raster_scale={raster_scale}"
+        );
+    }
+    let raster_width = width
+        .checked_mul(raster_scale)
+        .context("supersampled render surface width overflow")?;
+    let raster_height = height
+        .checked_mul(raster_scale)
+        .context("supersampled render surface height overflow")?;
+    let bytes = rgba_byte_len(raster_width, raster_height)?;
+    if bytes > MAX_RENDER_SURFACE_BYTES {
+        bail!(
+            "render surface exceeds safe memory limit: logical={width}x{height}, \
+             raster={raster_width}x{raster_height}, raster_scale={raster_scale}, \
+             bytes={bytes}, limit={MAX_RENDER_SURFACE_BYTES}"
+        );
+    }
+    Ok(RenderSurface {
+        width: raster_width,
+        height: raster_height,
+    })
+}
 
 pub struct TinySkiaRenderer;
 
@@ -116,21 +170,20 @@ impl TinySkiaRenderer {
         writing_mode: WritingMode,
         opts: &RenderOptions,
     ) -> Result<RgbaImage> {
-        let width = (layout.width + opts.padding * 2.0).ceil() as u32;
-        let height = (layout.height + opts.padding * 2.0).ceil() as u32;
-        if width == 0 || height == 0 {
-            bail!("invalid surface size {width}x{height}");
-        }
+        let logical_width = layout.width + opts.padding * 2.0;
+        let logical_height = layout.height + opts.padding * 2.0;
+        let width = checked_logical_dimension(logical_width, "width")?;
+        let height = checked_logical_dimension(logical_height, "height")?;
         let raster_scale = opts.raster.scale();
-        let raster_width = width
-            .checked_mul(raster_scale)
-            .context("supersampled render surface width overflow")?;
-        let raster_height = height
-            .checked_mul(raster_scale)
-            .context("supersampled render surface height overflow")?;
+        let surface = checked_render_surface(width, height, raster_scale).with_context(|| {
+            format!(
+                "refusing invalid render surface for layout={}x{}, padding={}, raster_scale={raster_scale}",
+                layout.width, layout.height, opts.padding
+            )
+        })?;
         let raster_scale_f = raster_scale as f32;
 
-        let mut surface = Pixmap::new(raster_width, raster_height)
+        let mut surface = Pixmap::new(surface.width, surface.height)
             .context("failed to allocate render surface")?;
         if let Some(bg) = opts.background {
             surface.fill(color_from_rgba(bg));
@@ -712,6 +765,68 @@ mod tests {
             RasterOptions::supersampled(99).scale(),
             MAX_SUPERSAMPLING_FACTOR
         );
+    }
+
+    #[test]
+    fn normal_render_surface_is_accepted() {
+        let surface = checked_render_surface(1_200, 2_276, 2).expect("normal page sprite");
+        assert_eq!(surface.width, 2_400);
+        assert_eq!(surface.height, 4_552);
+        assert_eq!(
+            rgba_byte_len(surface.width, surface.height).unwrap(),
+            43_699_200
+        );
+    }
+
+    #[test]
+    fn non_finite_logical_dimensions_are_rejected_before_casting() {
+        assert!(checked_logical_dimension(f32::NAN, "width").is_err());
+        assert!(checked_logical_dimension(f32::INFINITY, "height").is_err());
+        assert!(checked_logical_dimension(f32::NEG_INFINITY, "height").is_err());
+    }
+
+    #[test]
+    fn non_positive_logical_dimensions_are_rejected() {
+        assert!(checked_logical_dimension(0.0, "width").is_err());
+        assert!(checked_logical_dimension(-1.0, "height").is_err());
+        assert!(checked_render_surface(0, 10, 2).is_err());
+    }
+
+    #[test]
+    fn render_surface_arithmetic_overflow_is_rejected() {
+        assert!(checked_render_surface(u32::MAX, 1, 2).is_err());
+        assert!(rgba_byte_len(u32::MAX, u32::MAX).is_err());
+    }
+
+    #[test]
+    fn render_surface_above_memory_limit_is_rejected() {
+        let side = 10_000;
+        assert!(rgba_byte_len(side, side).unwrap() > MAX_RENDER_SURFACE_BYTES);
+        assert!(checked_render_surface(side, side, 1).is_err());
+    }
+
+    #[test]
+    fn known_crash_surface_is_rejected_before_pixmap_allocation() {
+        let bytes = rgba_byte_len(32_768, 33_472).expect("the byte count itself fits in u64");
+        assert_eq!(bytes, 4_387_241_984);
+        assert!(bytes > MAX_RENDER_SURFACE_BYTES);
+        assert!(checked_render_surface(32_768, 33_472, 1).is_err());
+    }
+
+    #[test]
+    fn renderer_rejects_known_crash_layout_before_allocating_a_pixmap() {
+        let layout = LayoutRun {
+            lines: Vec::new(),
+            width: 16_384.0,
+            height: 16_736.0,
+            font_size: 16.0,
+        };
+        let err = TinySkiaRenderer::new()
+            .unwrap()
+            .render(&layout, WritingMode::Horizontal, &RenderOptions::default())
+            .expect_err("the known crash layout must be rejected before Pixmap::new");
+
+        assert!(format!("{err:#}").contains("bytes=4387241984"));
     }
 
     #[test]

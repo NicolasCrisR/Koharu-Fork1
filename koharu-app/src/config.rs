@@ -263,6 +263,7 @@ pub fn apply_patch(config: &mut AppConfig, patch: koharu_core::ConfigPatch) {
         let mut new_providers = Vec::with_capacity(providers.len());
         for p in providers {
             let existing = config.providers.iter().find(|e| e.id == p.id);
+            let provider_id = p.id.clone();
             let api_key = match p.api_key.as_deref() {
                 Some(REDACTED) => existing.and_then(|e| e.api_key.clone()),
                 Some("") => None,
@@ -275,10 +276,10 @@ pub fn apply_patch(config: &mut AppConfig, patch: koharu_core::ConfigPatch) {
                     .base_url
                     .or_else(|| existing.and_then(|e| e.base_url.clone())),
                 api_key,
-                // Not part of the patch schema yet (no settings-UI support
-                // for multiple keys) — carry over whatever was already in
-                // config.toml so a patch never silently wipes it out.
-                api_keys: existing.map(|e| e.api_keys.clone()).unwrap_or_default(),
+                api_keys: match p.api_keys {
+                    Some(keys) => normalize_api_keys(keys, &provider_id),
+                    None => existing.map(|e| e.api_keys.clone()).unwrap_or_default(),
+                },
             });
         }
         config.providers = new_providers;
@@ -286,7 +287,29 @@ pub fn apply_patch(config: &mut AppConfig, patch: koharu_core::ConfigPatch) {
 
     validate_pipeline_config(config);
 }
+/// Trims whitespace and drops empty entries from a patched `api_keys`
+/// list. Duplicates are kept — not silently deduped — but logged, since a
+/// repeated key is almost always a mistake worth surfacing to the user
+/// rather than hiding.
+fn normalize_api_keys(keys: Vec<String>, provider_id: &str) -> Vec<String> {
+    let cleaned: Vec<String> = keys
+        .into_iter()
+        .map(|k| k.trim().to_owned())
+        .filter(|k| !k.is_empty())
+        .collect();
 
+    let mut seen = std::collections::HashSet::new();
+    let duplicate_count = cleaned.iter().filter(|k| !seen.insert(k.as_str())).count();
+    if duplicate_count > 0 {
+        tracing::warn!(
+            provider = provider_id,
+            duplicate_count,
+            "api_keys patch contains duplicate keys; keeping them as-is"
+        );
+    }
+
+    cleaned
+}
 fn validate_pipeline_config(config: &mut AppConfig) -> bool {
     let defaults = PipelineConfig::default();
     let mut changed = false;

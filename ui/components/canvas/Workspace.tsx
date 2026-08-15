@@ -12,6 +12,8 @@ import {
   setCanvasDocumentSize,
   setCanvasViewport,
 } from '@/components/canvas/canvasViewport'
+import { ContinuousWorkspace } from '@/components/canvas/ContinuousWorkspace'
+import { CropOverlay } from '@/components/canvas/CropOverlay'
 import { SubToolRail } from '@/components/canvas/SubToolRail'
 import { TextBlockLayer } from '@/components/canvas/TextBlockLayer'
 import { ToolRail } from '@/components/canvas/ToolRail'
@@ -64,7 +66,9 @@ export function Workspace() {
   const showRenderedImage = useEditorUiStore((s) => s.showRenderedImage)
   const showTextBlocksOverlay = useEditorUiStore((s) => s.showTextBlocksOverlay)
   const mode = useEditorUiStore((s) => s.mode)
+  const setMode = useEditorUiStore((s) => s.setMode)
   const autoFitEnabled = useEditorUiStore((s) => s.autoFitEnabled)
+  const continuousView = useEditorUiStore((s) => s.continuousView)
 
   const page = useCurrentPage()
   const clearSelection = useSelectionStore((s) => s.clear)
@@ -99,38 +103,38 @@ export function Workspace() {
   const pointerToDocument = usePointerToDocument(scaleRatio, canvasRef)
 
   const createTextNode = useCallback(
-    async (draft: BlockDraft) => {
-      if (!page) return
-      const at = Object.keys(page.nodes).length
-      const nodeId = crypto.randomUUID()
-      const transform: Transform = {
-        x: draft.x,
-        y: draft.y,
-        width: draft.width,
-        height: draft.height,
-        rotationDeg: 0,
-      }
-      const node: Node = {
-        id: nodeId,
-        transform,
-        visible: true,
-        kind: { text: { lockLayoutBox: true } },
-      }
-      await applyOp(ops.addNode(page.id, at, node))
-      useSelectionStore.getState().selectMany([nodeId])
-    },
-    [page],
+      async (draft: BlockDraft) => {
+        if (!page) return
+        const at = Object.keys(page.nodes).length
+        const nodeId = crypto.randomUUID()
+        const transform: Transform = {
+          x: draft.x,
+          y: draft.y,
+          width: draft.width,
+          height: draft.height,
+          rotationDeg: 0,
+        }
+        const node: Node = {
+          id: nodeId,
+          transform,
+          visible: true,
+          kind: { text: { lockLayoutBox: true } },
+        }
+        await applyOp(ops.addNode(page.id, at, node))
+        useSelectionStore.getState().selectMany([nodeId])
+      },
+      [page],
   )
 
   const removeTextNode = useCallback(
-    async (nodeId: string) => {
-      if (!page) return
-      const node = page.nodes[nodeId]
-      if (!node) return
-      const idx = Object.keys(page.nodes).indexOf(nodeId)
-      await applyOp(ops.removeNode(page.id, nodeId, node, idx < 0 ? 0 : idx))
-    },
-    [page],
+      async (nodeId: string) => {
+        if (!page) return
+        const node = page.nodes[nodeId]
+        if (!node) return
+        const idx = Object.keys(page.nodes).indexOf(nodeId)
+        await applyOp(ops.removeNode(page.id, nodeId, node, idx < 0 ? 0 : idx))
+      },
+      [page],
   )
 
   const { draftBlock, bind: bindBlockDraft } = useBlockDrafting({
@@ -146,13 +150,13 @@ export function Workspace() {
   const { brushCursorRef, isBrushMode, brushSize } = useBrushCursor(canvasRef, mode, page?.id)
 
   const maskPointerEnabled = useMemo(
-    () =>
-      mode === 'repairBrush' || (mode === 'eraser' && (showSegmentationMask || !showBrushLayer)),
-    [mode, showSegmentationMask, showBrushLayer],
+      () =>
+          mode === 'repairBrush' || (mode === 'eraser' && (showSegmentationMask || !showBrushLayer)),
+      [mode, showSegmentationMask, showBrushLayer],
   )
   const brushPointerEnabled = useMemo(
-    () => mode === 'brush' || (mode === 'eraser' && !showSegmentationMask && showBrushLayer),
-    [mode, showSegmentationMask, showBrushLayer],
+      () => mode === 'brush' || (mode === 'eraser' && !showSegmentationMask && showBrushLayer),
+      [mode, showSegmentationMask, showBrushLayer],
   )
 
   const maskDrawing = useMaskDrawing({
@@ -185,69 +189,69 @@ export function Workspace() {
   }, [page?.id, autoFitEnabled])
 
   const { contextMenuNodeId, handleContextMenu, handleDeleteBlock, clearContextMenu } =
-    useBlockContextMenu({
-      page,
-      pointerToDocument,
-      onSelect: (nodeId) => {
-        if (nodeId) useSelectionStore.getState().selectMany([nodeId])
-        else useSelectionStore.getState().clear()
-      },
-      onRemove: (nodeId) => {
-        void removeTextNode(nodeId)
-      },
-    })
+      useBlockContextMenu({
+        page,
+        pointerToDocument,
+        onSelect: (nodeId) => {
+          if (nodeId) useSelectionStore.getState().selectMany([nodeId])
+          else useSelectionStore.getState().clear()
+        },
+        onRemove: (nodeId) => {
+          void removeTextNode(nodeId)
+        },
+      })
   const { t } = useTranslation()
 
   useGesture(
-    {
-      onDrag: ({ first, movement: [mx, my], memo, cancel, ctrlKey }) => {
-        if (!page) return memo
-        if (!ctrlKey) {
-          if (first && cancel) cancel()
+      {
+        onDrag: ({ first, movement: [mx, my], memo, cancel, ctrlKey }) => {
+          if (!page) return memo
+          if (!ctrlKey) {
+            if (first && cancel) cancel()
+            return memo
+          }
+          const viewport = viewportRef.current
+          if (!viewport) return memo
+          if (first) {
+            return { scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop }
+          }
+          if (!memo) return memo
+          viewport.scrollLeft = memo.scrollLeft - mx
+          viewport.scrollTop = memo.scrollTop - my
           return memo
-        }
-        const viewport = viewportRef.current
-        if (!viewport) return memo
-        if (first) {
-          return { scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop }
-        }
-        if (!memo) return memo
-        viewport.scrollLeft = memo.scrollLeft - mx
-        viewport.scrollTop = memo.scrollTop - my
-        return memo
+        },
+        onWheel: ({ ctrlKey, delta: [, dy], event }) => {
+          if (!page || !ctrlKey) return
+          if (event.cancelable) event.preventDefault()
+          const direction = Math.sign(dy)
+          if (!direction) return
+          applyScale(useEditorUiStore.getState().scale - direction)
+        },
+        onPinch: ({ canceled, movement: [movementScale], memo }) => {
+          if (!page || canceled) return memo
+          const memoScaleRatio = resolvePinchMemoScaleRatio(
+              memo,
+              useEditorUiStore.getState().scale / 100,
+          )
+          const nextScaleRatio = resolvePinchNextScaleRatio(memoScaleRatio, movementScale)
+          applyScale(nextScaleRatio * 100)
+          return memoScaleRatio
+        },
       },
-      onWheel: ({ ctrlKey, delta: [, dy], event }) => {
-        if (!page || !ctrlKey) return
-        if (event.cancelable) event.preventDefault()
-        const direction = Math.sign(dy)
-        if (!direction) return
-        applyScale(useEditorUiStore.getState().scale - direction)
+      {
+        target: viewportRef,
+        eventOptions: { passive: false },
+        drag: { filterTaps: true, pointer: { mouse: true } },
+        wheel: { preventDefault: false },
+        pinch: {
+          threshold: 0.1,
+          enabled: true,
+          pinchOnWheel: false,
+          preventDefault: true,
+          scaleBounds: { min: 0.1, max: 1 },
+          from: () => [useEditorUiStore.getState().scale / 100, 0],
+        },
       },
-      onPinch: ({ canceled, movement: [movementScale], memo }) => {
-        if (!page || canceled) return memo
-        const memoScaleRatio = resolvePinchMemoScaleRatio(
-          memo,
-          useEditorUiStore.getState().scale / 100,
-        )
-        const nextScaleRatio = resolvePinchNextScaleRatio(memoScaleRatio, movementScale)
-        applyScale(nextScaleRatio * 100)
-        return memoScaleRatio
-      },
-    },
-    {
-      target: viewportRef,
-      eventOptions: { passive: false },
-      drag: { filterTaps: true, pointer: { mouse: true } },
-      wheel: { preventDefault: false },
-      pinch: {
-        threshold: 0.1,
-        enabled: true,
-        pinchOnWheel: false,
-        preventDefault: true,
-        scaleBounds: { min: 0.1, max: 1 },
-        from: () => [useEditorUiStore.getState().scale / 100, 0],
-      },
-    },
   )
 
   const handleCanvasPointerDownCapture = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -260,175 +264,193 @@ export function Workspace() {
   }
 
   const canvasCursor = useMemo(
-    () => (isBrushMode ? BRUSH_CURSOR : mode === 'block' ? 'cell' : 'default'),
-    [isBrushMode, mode],
+      () =>
+          isBrushMode
+              ? BRUSH_CURSOR
+              : mode === 'block'
+                  ? 'cell'
+                  : mode === 'crop'
+                      ? 'crosshair'
+                      : 'default',
+      [isBrushMode, mode],
   )
 
   const canvasDimensions = useMemo(
-    () =>
-      page
-        ? { width: page.width * scaleRatio, height: page.height * scaleRatio }
-        : { width: 0, height: 0 },
-    [page?.width, page?.height, scaleRatio],
+      () =>
+          page
+              ? { width: page.width * scaleRatio, height: page.height * scaleRatio }
+              : { width: 0, height: 0 },
+      [page?.width, page?.height, scaleRatio],
   )
 
   return (
-    <div className='relative flex min-h-0 min-w-0 flex-1 bg-muted'>
-      <ToolRail />
-      <SubToolRail />
-      <div className='relative flex min-h-0 min-w-0 flex-1 flex-col'>
-        <CanvasToolbar />
-        <ScrollAreaPrimitive.Root className='flex min-h-0 min-w-0 flex-1'>
-          <ScrollAreaPrimitive.Viewport
-            ref={handleViewportRef}
-            data-testid='workspace-viewport'
-            className='grid size-full place-content-center-safe'
-          >
-            {page ? (
-              <ContextMenu
-                onOpenChange={(open) => {
-                  if (!open) clearContextMenu()
-                }}
-              >
-                <ContextMenuTrigger asChild>
-                  <div className='grid place-items-center'>
-                    <div
-                      ref={canvasRef}
-                      data-testid='workspace-canvas'
-                      className='relative rounded-md border border-border bg-card shadow-sm'
-                      style={{
-                        ...canvasDimensions,
-                        cursor: canvasCursor,
-                        touchAction: 'none',
+      <div className='relative flex min-h-0 min-w-0 flex-1 bg-muted'>
+        {!continuousView && <ToolRail />}
+        {!continuousView && <SubToolRail />}
+        <div className='relative flex min-h-0 min-w-0 flex-1 flex-col'>
+          {!continuousView && <CanvasToolbar />}
+          <ScrollAreaPrimitive.Root className='flex min-h-0 min-w-0 flex-1'>
+            <ScrollAreaPrimitive.Viewport
+                ref={handleViewportRef}
+                data-testid='workspace-viewport'
+                className={continuousView ? 'size-full' : 'grid size-full place-content-center-safe'}
+            >
+              {continuousView ? (
+                  <ContinuousWorkspace />
+              ) : page ? (
+                  <ContextMenu
+                      onOpenChange={(open) => {
+                        if (!open) clearContextMenu()
                       }}
-                      onPointerDownCapture={handleCanvasPointerDownCapture}
-                      onContextMenuCapture={handleCanvasContextMenu}
-                      {...blockDraftBindings}
-                    >
-                      <div
-                        ref={brushCursorRef}
-                        className='pointer-events-none absolute z-50 rounded-full border border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5),0_1px_3px_rgba(0,0,0,0.3)] transition-opacity duration-75'
-                        style={{
-                          opacity: 0,
-                          width: brushSize * scaleRatio,
-                          height: brushSize * scaleRatio,
-                        }}
-                      />
-                      <div className='absolute inset-0'>
-                        <Image
-                          data={imageData}
-                          dataKey={imageHash ?? undefined}
-                          transition={false}
-                        />
-                        <canvas
-                          ref={maskDrawing.canvasRef}
-                          data-testid='workspace-mask-canvas'
-                          className='absolute inset-0 z-20'
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            opacity: showSegmentationMask ? 0.8 : 0,
-                            pointerEvents: maskPointerEnabled ? 'auto' : 'none',
-                            touchAction: 'none',
-                            transition: 'opacity 120ms ease',
-                          }}
-                          {...maskBindings}
-                        />
-                        {inpaintedData && (
-                          <Image
-                            data-testid='workspace-inpainted-image'
-                            data={inpaintedData}
-                            visible={showInpaintedImage}
-                            transition={true}
-                          />
-                        )}
-                        <canvas
-                          ref={brushLayerDisplay.canvasRef}
-                          data-testid='workspace-brush-display-canvas'
-                          className='absolute inset-0'
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            opacity: brushLayerDisplay.visible ? 1 : 0,
-                            pointerEvents: 'none',
-                            zIndex: 10,
-                            transition: 'opacity 120ms ease',
-                          }}
-                        />
-                        <canvas
-                          ref={brushDrawing.canvasRef}
-                          data-testid='workspace-brush-canvas'
-                          className='absolute inset-0'
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            opacity: brushDrawing.visible ? 1 : 0,
-                            pointerEvents: brushPointerEnabled ? 'auto' : 'none',
-                            touchAction: 'none',
-                            zIndex: 20,
-                            transition: 'opacity 120ms ease',
-                          }}
-                          {...brushBindings}
-                        />
-                        {showTextBlocksOverlay && (
-                          <TextBlockLayer
-                            showSprites={!showRenderedImage}
-                            scale={scaleRatio}
-                            style={{ zIndex: 30 }}
-                          />
-                        )}
-                        {renderedData && showRenderedImage && (
-                          <Image
-                            data-testid='workspace-rendered-image'
-                            data={renderedData}
-                            transition={true}
-                            style={{ zIndex: 40 }}
-                          />
-                        )}
-                      </div>
-                      {draftBlock && (
-                        <div
-                          className='pointer-events-none absolute rounded-md border-2 border-dashed border-primary bg-primary/10'
-                          style={{
-                            left: draftBlock.x * scaleRatio,
-                            top: draftBlock.y * scaleRatio,
-                            width: Math.max(0, draftBlock.width * scaleRatio),
-                            height: Math.max(0, draftBlock.height * scaleRatio),
-                          }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                </ContextMenuTrigger>
-                <ContextMenuContent className='min-w-32'>
-                  <ContextMenuItem
-                    disabled={contextMenuNodeId === null}
-                    onSelect={handleDeleteBlock}
                   >
-                    {t('workspace.deleteBlock')}
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
-            ) : (
-              <div className='flex h-full w-full items-center justify-center text-sm text-muted-foreground'>
-                {t('workspace.importPrompt')}
-              </div>
-            )}
-          </ScrollAreaPrimitive.Viewport>
-          <ScrollAreaPrimitive.Scrollbar
-            orientation='vertical'
-            className='flex w-2 touch-none p-px select-none'
-          >
-            <ScrollAreaPrimitive.Thumb className='flex-1 rounded bg-muted-foreground/40' />
-          </ScrollAreaPrimitive.Scrollbar>
-          <ScrollAreaPrimitive.Scrollbar
-            orientation='horizontal'
-            className='flex h-2 touch-none p-px select-none'
-          >
-            <ScrollAreaPrimitive.Thumb className='rounded bg-muted-foreground/40' />
-          </ScrollAreaPrimitive.Scrollbar>
-        </ScrollAreaPrimitive.Root>
+                    <ContextMenuTrigger asChild>
+                      <div className='grid place-items-center'>
+                        <div
+                            ref={canvasRef}
+                            data-testid='workspace-canvas'
+                            className='relative rounded-md border border-border bg-card shadow-sm'
+                            style={{
+                              ...canvasDimensions,
+                              cursor: canvasCursor,
+                              touchAction: 'none',
+                            }}
+                            onPointerDownCapture={handleCanvasPointerDownCapture}
+                            onContextMenuCapture={handleCanvasContextMenu}
+                            {...(mode === 'crop' ? {} : blockDraftBindings)}
+                        >
+                          <div
+                              ref={brushCursorRef}
+                              className='pointer-events-none absolute z-50 rounded-full border border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5),0_1px_3px_rgba(0,0,0,0.3)] transition-opacity duration-75'
+                              style={{
+                                opacity: 0,
+                                width: brushSize * scaleRatio,
+                                height: brushSize * scaleRatio,
+                              }}
+                          />
+                          <div className='absolute inset-0'>
+                            <Image
+                                data={imageData}
+                                dataKey={imageHash ?? undefined}
+                                transition={false}
+                            />
+                            <canvas
+                                ref={maskDrawing.canvasRef}
+                                data-testid='workspace-mask-canvas'
+                                className='absolute inset-0 z-20'
+                                style={{
+                                  width: '100%',
+                                  height: '100%',
+                                  opacity: showSegmentationMask ? 0.8 : 0,
+                                  pointerEvents: maskPointerEnabled ? 'auto' : 'none',
+                                  touchAction: 'none',
+                                  transition: 'opacity 120ms ease',
+                                }}
+                                {...maskBindings}
+                            />
+                            {inpaintedData && (
+                                <Image
+                                    data-testid='workspace-inpainted-image'
+                                    data={inpaintedData}
+                                    visible={showInpaintedImage}
+                                    transition={true}
+                                />
+                            )}
+                            <canvas
+                                ref={brushLayerDisplay.canvasRef}
+                                data-testid='workspace-brush-display-canvas'
+                                className='absolute inset-0'
+                                style={{
+                                  width: '100%',
+                                  height: '100%',
+                                  opacity: brushLayerDisplay.visible ? 1 : 0,
+                                  pointerEvents: 'none',
+                                  zIndex: 10,
+                                  transition: 'opacity 120ms ease',
+                                }}
+                            />
+                            <canvas
+                                ref={brushDrawing.canvasRef}
+                                data-testid='workspace-brush-canvas'
+                                className='absolute inset-0'
+                                style={{
+                                  width: '100%',
+                                  height: '100%',
+                                  opacity: brushDrawing.visible ? 1 : 0,
+                                  pointerEvents: brushPointerEnabled ? 'auto' : 'none',
+                                  touchAction: 'none',
+                                  zIndex: 20,
+                                  transition: 'opacity 120ms ease',
+                                }}
+                                {...brushBindings}
+                            />
+                            {showTextBlocksOverlay && (
+                                <TextBlockLayer
+                                    showSprites={!showRenderedImage}
+                                    scale={scaleRatio}
+                                    style={{ zIndex: 30 }}
+                                />
+                            )}
+                            {renderedData && showRenderedImage && (
+                                <Image
+                                    data-testid='workspace-rendered-image'
+                                    data={renderedData}
+                                    transition={true}
+                                    style={{ zIndex: 40 }}
+                                />
+                            )}
+                          </div>
+                          {draftBlock && (
+                              <div
+                                  className='pointer-events-none absolute rounded-md border-2 border-dashed border-primary bg-primary/10'
+                                  style={{
+                                    left: draftBlock.x * scaleRatio,
+                                    top: draftBlock.y * scaleRatio,
+                                    width: Math.max(0, draftBlock.width * scaleRatio),
+                                    height: Math.max(0, draftBlock.height * scaleRatio),
+                                  }}
+                              />
+                          )}
+                          {mode === 'crop' && page && (
+                              <CropOverlay
+                                  page={page}
+                                  scale={scaleRatio}
+                                  containerRef={canvasRef}
+                                  sourceBytes={imageData}
+                                  onCancel={() => setMode('select')}
+                              />
+                          )}
+                        </div>
+                      </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className='min-w-32'>
+                      <ContextMenuItem
+                          disabled={contextMenuNodeId === null}
+                          onSelect={handleDeleteBlock}
+                      >
+                        {t('workspace.deleteBlock')}
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
+              ) : (
+                  <div className='flex h-full w-full items-center justify-center text-sm text-muted-foreground'>
+                    {t('workspace.importPrompt')}
+                  </div>
+              )}
+            </ScrollAreaPrimitive.Viewport>
+            <ScrollAreaPrimitive.Scrollbar
+                orientation='vertical'
+                className='flex w-2 touch-none p-px select-none'
+            >
+              <ScrollAreaPrimitive.Thumb className='flex-1 rounded bg-muted-foreground/40' />
+            </ScrollAreaPrimitive.Scrollbar>
+            <ScrollAreaPrimitive.Scrollbar
+                orientation='horizontal'
+                className='flex h-2 touch-none p-px select-none'
+            >
+              <ScrollAreaPrimitive.Thumb className='rounded bg-muted-foreground/40' />
+            </ScrollAreaPrimitive.Scrollbar>
+          </ScrollAreaPrimitive.Root>
+        </div>
       </div>
-    </div>
   )
 }

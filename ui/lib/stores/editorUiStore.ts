@@ -72,6 +72,10 @@ type EditorUiState = {
   // reading order
   readingOrder: 'rtl' | 'ltr' | 'custom'
   setReadingOrder: (order: 'rtl' | 'ltr' | 'custom') => void
+
+  // continuous ("infinite scroll" / webtoon-style) preview across all pages
+  continuousView: boolean
+  setContinuousView: (enabled: boolean) => void
 }
 
 const initialState = {
@@ -90,6 +94,7 @@ const initialState = {
   error: undefined as { id: number; message: string } | undefined,
   showNavigator: true,
   readingOrder: 'rtl' as const,
+  continuousView: false,
 }
 
 export const useEditorUiStore = create<EditorUiState>((set) => ({
@@ -147,4 +152,6 @@ export const useEditorUiStore = create<EditorUiState>((set) => ({
   setShowNavigator: (show) => set({ showNavigator: show }),
 
   setReadingOrder: (readingOrder) => set({ readingOrder }),
+
+  setContinuousView: (continuousView) => set({ continuousView }),
 }))
