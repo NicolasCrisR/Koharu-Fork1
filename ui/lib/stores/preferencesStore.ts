@@ -63,7 +63,7 @@ const initialPreferences = {
     redo: getPlatform() === 'mac' ? 'Cmd+Shift+Z' : 'Ctrl+Shift+Z',
   },
   codexImagePrompt:
-    'Translate all visible text to natural English, remove the original lettering, and redraw the page as a clean manga image while preserving the artwork, panel layout, speech bubbles, tone, and composition.',
+      'Translate all visible text to natural English, remove the original lettering, and redraw the page as a clean manga image while preserving the artwork, panel layout, speech bubbles, tone, and composition.',
   codexImageModel: 'gpt-5.5',
   customPipeline: {
     detect: true,
@@ -75,97 +75,130 @@ const initialPreferences = {
 }
 
 export const usePreferencesStore = create<PreferencesState>()(
-  persist(
-    (set) => ({
-      ...initialPreferences,
-      setBrushConfig: (config) =>
-        set((state) => ({
-          brushConfig: {
-            ...state.brushConfig,
-            ...config,
-          },
-        })),
-      setDefaultFont: (font) => set({ defaultFont: font }),
-      toggleFavoriteFont: (font) =>
-        set((state) => ({
-          favoriteFonts: state.favoriteFonts.includes(font)
-            ? state.favoriteFonts.filter((f) => f !== font)
-            : [...state.favoriteFonts, font],
-        })),
-      setCustomSystemPrompt: (prompt) => set({ customSystemPrompt: prompt }),
-      setCodexImagePrompt: (prompt) => set({ codexImagePrompt: prompt }),
-      setCodexImageModel: (model) => set({ codexImageModel: model }),
-      setShortcuts: (shortcuts) =>
-        set((state) => ({
-          shortcuts: {
-            ...state.shortcuts,
-            ...shortcuts,
-          },
-        })),
-      resetShortcuts: () =>
-        set(() => ({
-          shortcuts: {
-            ...initialPreferences.shortcuts,
-          },
-        })),
-      setCustomPipeline: (pipeline) =>
-        set((state) => ({
-          customPipeline: {
-            ...state.customPipeline,
-            ...pipeline,
-          },
-        })),
-      resetPreferences: () => set({ ...initialPreferences }),
-    }),
-    {
-      name: 'koharu-config',
-      version: 7,
-      migrate: (persisted: any, version: number) => {
-        if (version < 2 && persisted) {
-          delete persisted.localLlm
-          delete persisted.openAiCompatibleConfigVersion
-        }
-        if (version < 3 && persisted) {
-          delete persisted.apiKeys
-          delete persisted.providerBaseUrls
-          delete persisted.providerModelNames
-        }
-        if (version < 4 && persisted?.shortcuts) {
-          for (const key in persisted.shortcuts) {
-            const val = persisted.shortcuts[key]
-            if (typeof val === 'string' && val.length === 1) {
-              persisted.shortcuts[key] = val.toUpperCase()
+    persist(
+        (set) => ({
+          ...initialPreferences,
+          setBrushConfig: (config) =>
+              set((state) => ({
+                brushConfig: {
+                  ...state.brushConfig,
+                  ...config,
+                },
+              })),
+          setDefaultFont: (font) => set({ defaultFont: font }),
+          toggleFavoriteFont: (font) =>
+              set((state) => ({
+                favoriteFonts: state.favoriteFonts.includes(font)
+                    ? state.favoriteFonts.filter((f) => f !== font)
+                    : [...state.favoriteFonts, font],
+              })),
+          setCustomSystemPrompt: (prompt) => set({ customSystemPrompt: prompt }),
+          setCodexImagePrompt: (prompt) => set({ codexImagePrompt: prompt }),
+          setCodexImageModel: (model) => set({ codexImageModel: model }),
+          setShortcuts: (shortcuts) =>
+              set((state) => ({
+                shortcuts: {
+                  ...state.shortcuts,
+                  ...shortcuts,
+                },
+              })),
+          resetShortcuts: () =>
+              set(() => ({
+                shortcuts: {
+                  ...initialPreferences.shortcuts,
+                },
+              })),
+          setCustomPipeline: (pipeline) =>
+              set((state) => ({
+                customPipeline: {
+                  ...state.customPipeline,
+                  ...pipeline,
+                },
+              })),
+          resetPreferences: () => set({ ...initialPreferences }),
+        }),
+        {
+          name: 'koharu-config',
+          version: 8,
+          migrate: (persisted: any, version: number) => {
+            if (version < 2 && persisted) {
+              delete persisted.localLlm
+              delete persisted.openAiCompatibleConfigVersion
             }
-          }
-        }
-        if (version < 5 && persisted?.shortcuts) {
-          const isMac = getPlatform() === 'mac'
-          if (!persisted.shortcuts.undo) {
-            persisted.shortcuts.undo = isMac ? 'Cmd+Z' : 'Ctrl+Z'
-          }
-          if (!persisted.shortcuts.redo) {
-            persisted.shortcuts.redo = isMac ? 'Cmd+Shift+Z' : 'Ctrl+Shift+Z'
-          }
-        }
-        if (version < 6 && persisted) {
-          persisted.codexImagePrompt ??= initialPreferences.codexImagePrompt
-          persisted.codexImageModel ??= initialPreferences.codexImageModel
-        }
-        if (persisted && (version < 7 || persisted.customPipeline?.detect === undefined)) {
-          persisted.customPipeline = initialPreferences.customPipeline
-        }
-        return persisted
-      },
-      partialize: (state) => ({
-        brushConfig: state.brushConfig,
-        defaultFont: state.defaultFont,
-        favoriteFonts: state.favoriteFonts,
-        customSystemPrompt: state.customSystemPrompt,
-        codexImagePrompt: state.codexImagePrompt,
-        codexImageModel: state.codexImageModel,
-        shortcuts: state.shortcuts,
-        customPipeline: state.customPipeline,
-      }),
-    },
-  ),
+            if (version < 3 && persisted) {
+              delete persisted.apiKeys
+              delete persisted.providerBaseUrls
+              delete persisted.providerModelNames
+            }
+            if (version < 4 && persisted?.shortcuts) {
+              for (const key in persisted.shortcuts) {
+                const val = persisted.shortcuts[key]
+                if (typeof val === 'string' && val.length === 1) {
+                  persisted.shortcuts[key] = val.toUpperCase()
+                }
+              }
+            }
+            if (version < 5 && persisted?.shortcuts) {
+              const isMac = getPlatform() === 'mac'
+              if (!persisted.shortcuts.undo) {
+                persisted.shortcuts.undo = isMac ? 'Cmd+Z' : 'Ctrl+Z'
+              }
+              if (!persisted.shortcuts.redo) {
+                persisted.shortcuts.redo = isMac ? 'Cmd+Shift+Z' : 'Ctrl+Shift+Z'
+              }
+            }
+            if (version < 6 && persisted) {
+              persisted.codexImagePrompt ??= initialPreferences.codexImagePrompt
+              persisted.codexImageModel ??= initialPreferences.codexImageModel
+            }
+            if (persisted && (version < 7 || persisted.customPipeline?.detect === undefined)) {
+              persisted.customPipeline = initialPreferences.customPipeline
+            }
+            // A previous bug could persist a `brushConfig` missing `size` and/or
+            // `color` (e.g. if it was ever written by a partial update before
+            // both fields existed). Normalize on every migration pass so the
+            // brush cursor and drawing tools never read `undefined` for these.
+            if (version < 8 && persisted) {
+              persisted.brushConfig = {
+                ...initialPreferences.brushConfig,
+                ...(persisted.brushConfig ?? {}),
+              }
+            }
+            return persisted
+          },
+          // Defensive merge on every rehydrate (not just versioned migrations):
+          // if `brushConfig` (or other nested objects) is ever missing a key in
+          // the persisted blob, fall back to the corresponding default instead
+          // of letting `undefined` leak into the live store.
+          merge: (persisted, current) => {
+            const persistedState = (persisted ?? {}) as Partial<PreferencesState>
+            return {
+              ...current,
+              ...persistedState,
+              brushConfig: {
+                ...current.brushConfig,
+                ...(persistedState.brushConfig ?? {}),
+              },
+              shortcuts: {
+                ...current.shortcuts,
+                ...(persistedState.shortcuts ?? {}),
+              },
+              customPipeline: {
+                ...current.customPipeline,
+                ...(persistedState.customPipeline ?? {}),
+              },
+            }
+          },
+          partialize: (state) => ({
+            brushConfig: state.brushConfig,
+            defaultFont: state.defaultFont,
+            favoriteFonts: state.favoriteFonts,
+            customSystemPrompt: state.customSystemPrompt,
+            codexImagePrompt: state.codexImagePrompt,
+            codexImageModel: state.codexImageModel,
+            shortcuts: state.shortcuts,
+            customPipeline: state.customPipeline,
+          }),
+        },
+    ),
 )

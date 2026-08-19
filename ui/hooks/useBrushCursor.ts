@@ -6,19 +6,22 @@ import type React from 'react'
 import { usePreferencesStore } from '@/lib/stores/preferencesStore'
 
 export function useBrushCursor(
-  canvasRef: React.RefObject<HTMLDivElement | null>,
-  mode: string,
-  pageKey?: string,
+    canvasRef: React.RefObject<HTMLDivElement | null>,
+    mode: string,
+    pageKey?: string,
 ) {
   const brushCursorRef = useRef<HTMLDivElement>(null)
   const cachedRectRef = useRef<DOMRect | null>(null)
   const mousePosRef = useRef<{ x: number; y: number } | null>(null)
   const isInsideRef = useRef(false)
-  const brushSize = usePreferencesStore((state) => state.brushConfig.size)
+  // Defensive fallback: a persisted `brushConfig` from an older/corrupted
+  // preferences blob could theoretically still resolve to `undefined` here,
+  // which would make the cursor render at `NaN` size (i.e. invisible).
+  const brushSize = usePreferencesStore((state) => state.brushConfig.size ?? 36)
 
   const isBrushMode = useMemo(
-    () => mode === 'brush' || mode === 'repairBrush' || mode === 'eraser',
-    [mode],
+      () => mode === 'brush' || mode === 'repairBrush' || mode === 'eraser',
+      [mode],
   )
 
   const isBrushModeRef = useRef(isBrushMode)

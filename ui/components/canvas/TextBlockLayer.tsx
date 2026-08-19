@@ -1,7 +1,7 @@
 'use client'
 
 import { useDrag } from '@use-gesture/react'
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useHotkeys } from 'react-hotkeys-hook'
 
@@ -127,6 +127,53 @@ const isShiftHeld = (event: unknown): boolean => {
     return !!(event as { shiftKey?: boolean }).shiftKey
 }
 
+/**
+ * Tracks physical Shift key state via `window` key events, independent of
+ * whatever modifier flags `@use-gesture/react`'s pointer event carries.
+ *
+ * `event.shiftKey` on the pointer/mouse event passed into `useDrag`'s
+ * callback is not always reliable mid-drag: some browsers/WebViews (this
+ * app runs inside a Tauri WebView) can omit or lag the modifier flag on
+ * `pointermove` once a drag is in progress, especially across long drags or
+ * when the pointer briefly leaves the window bounds. That made the
+ * shift-lock axis guides intermittently fail to appear even though the key
+ * genuinely was held.
+ *
+ * Falling back to real `keydown`/`keyup` listeners sidesteps that: those
+ * events reliably fire for the physical key regardless of what the pointer
+ * event reports. Callers should OR this with `isShiftHeld(event)` rather
+ * than replacing it outright, so a Shift held *before* the pointer entered
+ * the window (and thus never seen by our own keydown listener) still works.
+ */
+function useGlobalShiftKey() {
+    const shiftHeldRef = useRef(false)
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Shift') shiftHeldRef.current = true
+        }
+        const handleKeyUp = (e: KeyboardEvent) => {
+            if (e.key === 'Shift') shiftHeldRef.current = false
+        }
+        // Losing window focus mid-drag (alt-tab, devtools, etc.) means we'll
+        // never see the matching keyup — reset so the guide doesn't get
+        // stuck "on".
+        const handleBlur = () => {
+            shiftHeldRef.current = false
+        }
+        window.addEventListener('keydown', handleKeyDown)
+        window.addEventListener('keyup', handleKeyUp)
+        window.addEventListener('blur', handleBlur)
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown)
+            window.removeEventListener('keyup', handleKeyUp)
+            window.removeEventListener('blur', handleBlur)
+        }
+    }, [])
+
+    return shiftHeldRef
+}
+
 const RESIZE_HANDLE_SIZE = 8
 
 type ResizeEdge = { top: boolean; bottom: boolean; left: boolean; right: boolean }
@@ -150,6 +197,7 @@ function TextBlockItem({
     const angleBadgeRef = useRef<HTMLDivElement>(null)
     const guideHRef = useRef<HTMLDivElement>(null)
     const guideVRef = useRef<HTMLDivElement>(null)
+    const globalShiftHeldRef = useGlobalShiftKey()
 
     // Imperatively position/label the rotation-angle badge next to the
     // pointer, mirroring `setBox`'s "skip React during drag" approach so the
@@ -256,7 +304,7 @@ function TextBlockItem({
                 // drag the same way Canva/Figma do).
                 let dx = mx
                 let dy = my
-                const shiftLocked = isShiftHeld(event)
+                const shiftLocked = isShiftHeld(event) || globalShiftHeldRef.current
                 if (shiftLocked) {
                     if (Math.abs(mx) >= Math.abs(my)) {
                         dy = 0
@@ -319,7 +367,7 @@ function TextBlockItem({
         const currentAngle = (Math.atan2(event.clientY - cy, event.clientX - cx) * 180) / Math.PI
         let next = rotation + (currentAngle - pointerAngle)
         // Hold Shift to snap to 15° increments, matching common design-tool conventions.
-        if (isShiftHeld(event)) next = Math.round(next / 15) * 15
+        if (isShiftHeld(event) || globalShiftHeldRef.current) next = Math.round(next / 15) * 15
         next = ((next % 360) + 360) % 360
         lastRotationRef.current = next
         setBox(t.x * scale, t.y * scale, t.width * scale, t.height * scale, next)
@@ -348,6 +396,17 @@ function TextBlockItem({
             <div
                 ref={boxRef}
                 {...bind()}
+                // `bind()`'s handlers see the pointer events (pointerdown/up)
+                // and already call `event.stopPropagation()` on those, but the
+                // browser still dispatches a separate native `click` after
+                // pointerup, which isn't stopped by that. In continuous view
+                // that click bubbles up to `ContinuousPage`'s own `onClick`,
+                // which calls `setPage()` — and `setPage()` resets
+                // `selectionStore.nodeIds`, instantly un-selecting the block
+                // this very click just selected (the "blinking" selection
+                // bug). Stopping the click here keeps it from ever reaching
+                // the page.
+                onClick={(event) => event.stopPropagation()}
                 style={{
                     position: 'absolute',
                     top: 0,

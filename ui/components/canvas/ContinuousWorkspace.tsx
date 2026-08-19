@@ -173,7 +173,14 @@ export function ContinuousWorkspace() {
                     key={page.id}
                     page={page}
                     scale={scaleRatio}
-                    zIndex={pages.length - i}
+                    // Capped so a long project (dozens/hundreds of pages)
+                    // can never produce a z-index higher than any fixed UI
+                    // chrome (menus, dialogs, etc). Relative order between
+                    // pages near the top of the stack is all that actually
+                    // matters for the overflow-painting behavior this
+                    // z-index exists for; capping only affects pages far
+                    // down the list, which never overlap each other anyway.
+                    zIndex={Math.min(pages.length - i, 200)}
                     active={page.id === currentPageId}
                     registerEl={registerEl}
                     onSelect={selectPage}
