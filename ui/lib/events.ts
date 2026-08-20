@@ -118,6 +118,39 @@ export function connectEvents(baseUrl = '/api/v1'): () => void {
  */
 const lastPageByJob = new Map<string, number>()
 
+/**
+ * Timestamp (`performance.now()`) of the last `invalidateScene()` call
+ * triggered by a `jobProgress` page-boundary crossing, keyed by job id.
+ * See `SCENE_INVALIDATE_MIN_INTERVAL_MS` below for why this exists.
+ */
+const lastSceneInvalidateAt = new Map<string, number>()
+
+/**
+ * On a large batch job (hundreds of pages), the backend can cross a page
+ * boundary every few dozen milliseconds. Calling `invalidateScene()` on
+ * *every* one of those refetches the entire `scene.json` (all pages, not
+ * just the finished one — there's no incremental/paginated fetch) and
+ * re-renders the full continuous-view page list every time.
+ *
+ * That work is synchronous enough to starve the main thread, so React
+ * can't paint in between: `jobsStore`'s progress state (`currentPage`,
+ * `overallPercent`) is in fact updated immediately and correctly on every
+ * SSE frame, but the browser has no opportunity to actually repaint it —
+ * the UI visibly "sticks" at an early page count until something (like
+ * clicking Stop, which triggers its own render) forces a flush, at which
+ * point it jumps to the real, much higher value. The repeated full-scene
+ * refetches are also the main source of the overall slowdown during a
+ * batch run.
+ *
+ * Throttling how often a page-boundary crossing is allowed to trigger a
+ * refetch fixes both symptoms: the progress bar stays live (it never
+ * depended on the scene fetch), and the main thread gets to actually
+ * paint between refetches. We still always refetch once more when the
+ * job finishes (see the `jobFinished` case), so the final state is never
+ * stale.
+ */
+const SCENE_INVALIDATE_MIN_INTERVAL_MS = 500
+
 function invalidateScene(): void {
   void queryClient.invalidateQueries({ queryKey: getGetSceneJsonQueryKey() })
 }
@@ -130,6 +163,7 @@ function dispatch(event: AppEvent): void {
       useJobsStore.getState().setSnapshot(event.jobs)
       useDownloadsStore.getState().setSnapshot(event.downloads)
       lastPageByJob.clear()
+      lastSceneInvalidateAt.clear()
       return
 
     case 'jobStarted':
@@ -142,14 +176,23 @@ function dispatch(event: AppEvent): void {
       // Multi-page pipelines: when the backend advances to the next page,
       // everything it just applied to the previous page is in the scene
       // now — refetch so the UI shows incremental results instead of
-      // freezing until `jobFinished` at the end of the batch.
-      {
-        const prev = lastPageByJob.get(event.jobId) ?? -1
-        if (event.currentPage !== prev) {
-          lastPageByJob.set(event.jobId, event.currentPage)
-          if (prev >= 0) invalidateScene()
+      // freezing until `jobFinished` at the end of the batch. Throttled
+      // (see `SCENE_INVALIDATE_MIN_INTERVAL_MS`) so a fast multi-hundred
+      // page batch doesn't refetch the whole scene on every single page.
+    {
+      const prev = lastPageByJob.get(event.jobId) ?? -1
+      if (event.currentPage !== prev) {
+        lastPageByJob.set(event.jobId, event.currentPage)
+        if (prev >= 0) {
+          const now = performance.now()
+          const lastInvalidate = lastSceneInvalidateAt.get(event.jobId) ?? 0
+          if (now - lastInvalidate >= SCENE_INVALIDATE_MIN_INTERVAL_MS) {
+            lastSceneInvalidateAt.set(event.jobId, now)
+            invalidateScene()
+          }
         }
       }
+    }
       return
 
     case 'jobWarning':
@@ -162,8 +205,10 @@ function dispatch(event: AppEvent): void {
         useEditorUiStore.getState().showError(event.error)
       }
       lastPageByJob.delete(event.id)
+      lastSceneInvalidateAt.delete(event.id)
       // Pipelines mutate the scene server-side without op-level SSE frames;
-      // refetch so the final page's nodes + blobs land in the UI.
+      // refetch so the final page's nodes + blobs land in the UI. Always
+      // unthrottled — this is the one refetch that must never be skipped.
       invalidateScene()
       return
 
@@ -181,9 +226,9 @@ function dispatch(event: AppEvent): void {
       void queryClient.invalidateQueries({ queryKey: getGetCurrentLlmQueryKey() })
       return
 
-    // Anything else (opApplied, projectOpened/Closed, configChanged, error)
-    // is caller-driven — the action that triggered it is responsible for
-    // updating the relevant store.
+      // Anything else (opApplied, projectOpened/Closed, configChanged, error)
+      // is caller-driven — the action that triggered it is responsible for
+      // updating the relevant store.
   }
 }
 
